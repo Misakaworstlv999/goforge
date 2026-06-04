@@ -1,0 +1,363 @@
+{
+  "milestones": [
+    {
+      "id": "M1",
+      "name": "Hello LLM",
+      "goal": "Talk to an LLM with streaming output",
+      "ai_skills": "LLM API, Prompt basics",
+      "go_skills": "HTTP client, SSE parsing, iter.Seq2",
+      "features": [
+        {
+          "id": "M1-001",
+          "name": "Project Scaffold",
+          "description": "go mod init, directory structure per concentric-ring model, minimal main.go, verify go build passes",
+          "dependencies": [],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M1-002",
+          "name": "Message Types",
+          "description": "Define provider-agnostic Message, Role, ToolCall, ToolResult, Response types in pkg/llm/",
+          "dependencies": ["M1-001"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M1-003",
+          "name": "LLM Interface",
+          "description": "Define LLM interface with Chat() and ChatStream() returning iter.Seq2[Chunk, error]. Define Option pattern.",
+          "dependencies": ["M1-002"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M1-004",
+          "name": "OpenAI-Compatible Provider",
+          "description": "Implement OpenAI-compatible provider: HTTP client, SSE stream parsing, message format conversion. Works with OpenAI, DeepSeek, Ollama.",
+          "dependencies": ["M1-003"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M1-005",
+          "name": "Anthropic Provider",
+          "description": "Implement Anthropic Claude provider: Messages API, streaming, tool_use block conversion.",
+          "dependencies": ["M1-003"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M1-006",
+          "name": "CLI Chat Demo",
+          "description": "Simple CLI that reads user input, sends to LLM, prints streaming response. First runnable demo.",
+          "dependencies": ["M1-004"],
+          "status": "not-started",
+          "evidence": ""
+        }
+      ]
+    },
+    {
+      "id": "M2",
+      "name": "Tool Calling",
+      "goal": "Agent can define and execute typed tools",
+      "ai_skills": "Function Calling, JSON Schema",
+      "go_skills": "Reflection, generics, struct tags",
+      "features": [
+        {
+          "id": "M2-001",
+          "name": "Tool Interface",
+          "description": "Define Tool interface: Name(), Description(), Schema(), Execute(). Define ToolSet interface for dynamic tool collections.",
+          "dependencies": ["M1-003"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M2-002",
+          "name": "JSON Schema Generation",
+          "description": "Implement NewTool[Args] generic constructor that generates JSON Schema from Go struct tags via reflection.",
+          "dependencies": ["M2-001"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M2-003",
+          "name": "Tool Registry",
+          "description": "Tool registry: register/lookup by name, list all schemas for LLM request, concurrent-safe.",
+          "dependencies": ["M2-002"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M2-004",
+          "name": "Built-in Tools: Calculator + Clock",
+          "description": "Two trivial tools to validate the tool system end-to-end: calculator (add/multiply) and current time.",
+          "dependencies": ["M2-003"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M2-005",
+          "name": "Tool Calling Integration",
+          "description": "Wire tool schemas into LLM request, parse tool_calls from response, execute and return results. Single-step only (no loop yet).",
+          "dependencies": ["M2-004", "M1-004"],
+          "status": "not-started",
+          "evidence": ""
+        }
+      ]
+    },
+    {
+      "id": "M3",
+      "name": "ReAct Agent",
+      "goal": "Complete ReAct think-act-observe loop",
+      "ai_skills": "ReAct pattern, step limit, parallel tool execution",
+      "go_skills": "goroutine, errgroup, iter.Seq2 yield",
+      "features": [
+        {
+          "id": "M3-001",
+          "name": "Event Types",
+          "description": "Define Event sum type: ThinkEvent, ToolCallEvent, ToolResultEvent, FinalResponseEvent, ErrorEvent.",
+          "dependencies": ["M2-001"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M3-002",
+          "name": "ReAct Loop",
+          "description": "Core ~200-line ReAct loop: while(tool_calls) { call LLM → execute tools → append results }. max_steps guard. Returns iter.Seq2[Event, error].",
+          "dependencies": ["M3-001", "M2-005"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M3-003",
+          "name": "Parallel Tool Execution",
+          "description": "When LLM returns multiple tool_calls, execute them concurrently via goroutine + errgroup. Timeout per tool.",
+          "dependencies": ["M3-002"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M3-004",
+          "name": "Agent Interface",
+          "description": "Define Agent interface with Run(ctx, task) iter.Seq2[Event, error]. Implement SimpleAgent wrapping ReAct loop.",
+          "dependencies": ["M3-003"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M3-005",
+          "name": "Built-in Tools: File + Shell",
+          "description": "File read/write/list and shell exec tools with basic sandboxing (allowed dirs, command allowlist).",
+          "dependencies": ["M2-002"],
+          "status": "not-started",
+          "evidence": ""
+        }
+      ]
+    },
+    {
+      "id": "M4",
+      "name": "Context Engineering",
+      "goal": "Three-tier context compaction + stage-aware context loading",
+      "ai_skills": "Token counting, compaction strategies, context window management",
+      "go_skills": "String processing, LRU cache, tiktoken",
+      "features": [
+        {
+          "id": "M4-001",
+          "name": "Token Counter",
+          "description": "Token counting utility (tiktoken-go or simple word-based estimator). Counts messages, tool results, system prompts.",
+          "dependencies": ["M1-002"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M4-002",
+          "name": "ContextPolicy",
+          "description": "Define ContextPolicy struct: MaxTokens, Sources (enum), Breadth (wide/narrow), Depth (shallow/deep). Agents are configured with a policy.",
+          "dependencies": ["M4-001"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M4-003",
+          "name": "Three-Tier Compaction",
+          "description": "Budget check (drop oldest tool results) → micro-compact (truncate long outputs) → full compaction (LLM-based summarization). Inspired by Claude Code.",
+          "dependencies": ["M4-002", "M3-002"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M4-004",
+          "name": "System Prompt Engineering",
+          "description": "Configurable system prompt builder: role definition + stage instructions + tool descriptions + context policy directives.",
+          "dependencies": ["M4-002"],
+          "status": "not-started",
+          "evidence": ""
+        }
+      ]
+    },
+    {
+      "id": "M5",
+      "name": "Pipeline Engine",
+      "goal": "Multi-stage orchestration with verification gates and checkpoint",
+      "ai_skills": "State machines, persistence, human-in-the-loop interrupt/resume",
+      "go_skills": "SQLite, gob serialization, FSM pattern",
+      "features": [
+        {
+          "id": "M5-001",
+          "name": "Stage Interface",
+          "description": "Define Stage[In, Out] with Run() and Verify() (verification gate). Define Gate types: Auto, LLMReview, HumanApproval.",
+          "dependencies": ["M3-004"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M5-002",
+          "name": "Pipeline FSM",
+          "description": "Finite state machine: stage registration, conditional routing (next/retry/fail), maxRetries per stage. ~300 lines.",
+          "dependencies": ["M5-001"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M5-003",
+          "name": "Checkpoint Store",
+          "description": "SQLite-backed checkpoint: serialize PipelineState via gob, save/restore on stage transitions. Pipeline survives process restarts.",
+          "dependencies": ["M5-002"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M5-004",
+          "name": "Interrupt / Resume",
+          "description": "Human-in-the-loop: pipeline pauses at HumanApproval gates, persists state, resumes when approval arrives via API or CLI.",
+          "dependencies": ["M5-003"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M5-005",
+          "name": "Audit Log",
+          "description": "Event audit table in SQLite: every stage transition, gate result, error, and resume action is logged with timestamp.",
+          "dependencies": ["M5-003"],
+          "status": "not-started",
+          "evidence": ""
+        }
+      ]
+    },
+    {
+      "id": "M6",
+      "name": "Dev Workflow",
+      "goal": "Complete development workflow: requirement → design → code → review → test",
+      "ai_skills": "Orchestrator-Worker, Evaluator-Optimizer, domain-specific agents",
+      "go_skills": "Comprehensive application of all previous skills",
+      "features": [
+        {
+          "id": "M6-001",
+          "name": "Requirement Analysis Stage",
+          "description": "Agent reads requirement description, analyzes scope, identifies affected components. Output: structured RequirementSpec.",
+          "dependencies": ["M5-002", "M4-002"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M6-002",
+          "name": "Technical Design Stage",
+          "description": "Agent generates technical design doc based on RequirementSpec. Output: TechDesign with approach, files to modify, risks.",
+          "dependencies": ["M6-001"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M6-003",
+          "name": "Coding Stage",
+          "description": "Agent implements code changes per TechDesign using file/shell tools. Narrow+deep ContextPolicy. Output: CodeChanges (file diffs).",
+          "dependencies": ["M6-002", "M3-005"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M6-004",
+          "name": "Auto Review Stage",
+          "description": "Evaluator-Optimizer pattern: review agent scores code quality, suggests improvements. If score < threshold, bounces back to Coding.",
+          "dependencies": ["M6-003"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M6-005",
+          "name": "Testing Stage",
+          "description": "Agent generates and runs tests. Validates build + lint + test pass. Output: TestReport.",
+          "dependencies": ["M6-004"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M6-006",
+          "name": "Multi-Agent Orchestration",
+          "description": "Orchestrator-Worker pattern: orchestrator decomposes tasks, spawns worker agents in parallel goroutines, synthesizes results.",
+          "dependencies": ["M6-003"],
+          "status": "not-started",
+          "evidence": ""
+        }
+      ]
+    },
+    {
+      "id": "M7",
+      "name": "Production Ready",
+      "goal": "HTTP API, CLI, observability, and documentation",
+      "ai_skills": "MCP protocol, Webhook integration",
+      "go_skills": "net/http, OpenTelemetry, zap, cobra",
+      "features": [
+        {
+          "id": "M7-001",
+          "name": "HTTP API Server",
+          "description": "REST API: POST /pipeline/trigger, GET /pipeline/{id}, POST /pipeline/{id}/resume, GET /health. net/http stdlib.",
+          "dependencies": ["M5-004"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M7-002",
+          "name": "Webhook Handler",
+          "description": "GitHub/GitLab webhook endpoint: receive MR comments, trigger pipeline resume or review.",
+          "dependencies": ["M7-001"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M7-003",
+          "name": "CLI",
+          "description": "Command-line interface: goforge chat (interactive), goforge run (trigger pipeline), goforge status. Single binary.",
+          "dependencies": ["M3-004", "M5-002"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M7-004",
+          "name": "Observability",
+          "description": "OpenTelemetry: trace spans per pipeline stage and agent step, metrics for token usage and latency. Zap structured logging throughout.",
+          "dependencies": ["M5-002", "M3-002"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M7-005",
+          "name": "MCP Server",
+          "description": "Expose GoForge itself as an MCP server: tools for triggering pipelines, querying status. Enables integration with Cursor/Claude.",
+          "dependencies": ["M7-001"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M7-006",
+          "name": "README and Documentation",
+          "description": "Complete README with architecture diagram, quickstart, API reference. Ensure all docs pass desensitization scan.",
+          "dependencies": ["M6-005"],
+          "status": "not-started",
+          "evidence": ""
+        }
+      ]
+    }
+  ]
+}

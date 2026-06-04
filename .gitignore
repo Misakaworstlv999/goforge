@@ -1,0 +1,57 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+goforge
+server
+
+# Build output
+/bin/
+/dist/
+
+# Test
+*.test
+*.out
+coverage.html
+
+# Go workspace
+go.work
+go.work.sum
+
+# Dependency directory (use go mod vendor if needed)
+/vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# SQLite (checkpoint store runtime data)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Cursor / agent artifacts (local only)
+.cursor/
+session-handoff.md
+progress.md
+
+# Sensitive words list (local only, never commit)
+.sensitive-words
+
+# Plan files
+*.plan.md
