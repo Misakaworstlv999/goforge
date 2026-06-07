@@ -12,6 +12,48 @@ GoForge is an AI-powered development workflow engine built from scratch in Go. I
 4. **Active context management**: Strategy-driven context loading, not passive accumulation
 5. **Verification-first**: Every stage transition requires explicit validation
 
+## Interface Design Principles
+
+Derived from analyzing Eino (ByteDance), tRPC-Agent-Go (Tencent), and ADK-Go (Google):
+
+**Rule: Ring boundaries use interfaces; ring internals use concrete types.**
+
+- **Interfaces at boundaries** — where implementations are swappable (LLM providers, checkpoint backends, tools). Keep interfaces narrow: 1-3 methods. If an interface grows beyond 3 methods, split it.
+- **Concrete types for orchestration** — the ReAct loop, Pipeline FSM, and Registry are concrete structs. Debuggability matters more than abstraction for these core paths.
+- **Function types for lightweight strategies** — `CompactFunc`, `GateFunc`, `ContextSource` are function signatures, not interfaces. Avoids single-method interface boilerplate.
+- **Optional capabilities via type assertion** — e.g., if a `Tool` also implements `StreamableTool`, detect at runtime. Don't force all tools to implement streaming.
+- **No cross-provider dependencies** — providers within the same ring must not import each other. Shared utilities go to `internal/`.
+
+```mermaid
+flowchart LR
+    subgraph boundaries ["Interfaces (Ring Boundaries)"]
+        LLMIface["LLM"]
+        ToolIface["Tool / ToolSet"]
+        AgentIface["Agent"]
+        GateIface["Gate"]
+        StoreIface["CheckpointStore"]
+        HandlerIface["EventHandler"]
+    end
+
+    subgraph concrete ["Concrete Types (Ring Internals)"]
+        OpenAI["openai.Provider"]
+        Anthropic["anthropic.Provider"]
+        Registry["tool.Registry"]
+        SimpleAgent["agent.SimpleAgent"]
+        PipelineFSM["pipeline.Pipeline"]
+        SQLiteStore["pipeline.SQLiteStore"]
+    end
+
+    LLMIface -.->|implements| OpenAI
+    LLMIface -.->|implements| Anthropic
+    ToolIface -.->|registers in| Registry
+    AgentIface -.->|implements| SimpleAgent
+    GateIface -.->|used by| PipelineFSM
+    StoreIface -.->|implements| SQLiteStore
+```
+
+---
+
 ## Concentric Ring Model
 
 ```mermaid
@@ -57,7 +99,7 @@ Cross-cutting concerns (`internal/`): config, logging (zap), telemetry (OTel).
 
 ## Ring 1: LLM Client
 
-**Learning goals**: HTTP client, SSE stream parsing, Provider pattern, `iter.Seq2`
+**Learning goals**: Provider pattern, SDK integration, `iter.Seq2`, type conversion at boundaries
 
 ### Core Interface
 
@@ -120,8 +162,12 @@ type Chunk struct {
 
 ### Providers
 
-- **OpenAI-compatible**: Works with OpenAI, DeepSeek, Ollama, any OpenAI-API-compatible service
-- **Anthropic**: Claude Messages API with tool_use block mapping
+Thin adapter pattern — each provider wraps an official SDK and only does bidirectional type conversion.
+
+- **OpenAI-compatible**: `openai/openai-go` SDK. Works with OpenAI, DeepSeek, Ollama, any OpenAI-API-compatible service
+- **Anthropic**: `anthropics/anthropic-sdk-go` SDK. Claude Messages API with tool_use block mapping
+
+See [M1_DESIGN_NOTES.md](M1_DESIGN_NOTES.md) for detailed code-level comparison with reference frameworks.
 
 ### Retry & Rate Limiting
 
@@ -555,11 +601,12 @@ goforge/
 │   └── server/main.go           # HTTP server entry
 ├── pkg/
 │   ├── llm/                     # Ring 1
-│   │   ├── llm.go               # LLM interface + Message types
+│   │   ├── llm.go               # LLM interface
+│   │   ├── message.go           # Provider-agnostic message types
 │   │   ├── option.go            # Functional options
-│   │   ├── openai/              # OpenAI-compatible provider
+│   │   ├── openai/              # OpenAI SDK adapter
 │   │   │   └── provider.go
-│   │   └── anthropic/           # Claude provider
+│   │   └── anthropic/           # Anthropic SDK adapter
 │   │       └── provider.go
 │   ├── tool/                    # Ring 2
 │   │   ├── tool.go              # Tool interface
@@ -622,7 +669,7 @@ goforge/
 
 | Milestone | Goal | AI Skills | Go Skills | ~LOC |
 |-----------|------|-----------|-----------|------|
-| M1: Hello LLM | Chat + stream | LLM API, prompting | HTTP client, SSE, iter.Seq2 | 500 |
+| M1: Hello LLM | Chat + stream | LLM API, prompting | SDK integration, iter.Seq2 | 500 |
 | M2: Tool Calling | Typed tools | Function calling, JSON Schema | Reflection, generics, struct tags | 800 |
 | M3: ReAct Agent | Think-act-observe | ReAct pattern, step limits | goroutine, errgroup | 400 |
 | M4: Context Engineering | Smart compaction | Token counting, context window | String processing, LRU | 600 |

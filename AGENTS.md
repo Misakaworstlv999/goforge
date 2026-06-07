@@ -17,7 +17,7 @@ If baseline verification is failing, repair that first before adding new scope.
 
 ## Project Context
 
-- **Language**: Go 1.23+ (leverages `iter.Seq2` for streaming)
+- **Language**: Go 1.24+ (leverages `iter.Seq2` for streaming; 1.24 required by anthropic-sdk-go)
 - **Module path**: `github.com/Misakaworstlv999/goforge`
 - **Local path**: `/Users/fengmoyuan/GolandProjects/goforge`
 - **Reference code**: `/Users/fengmoyuan/GolandProjects/goforge-references/` (Eino, tRPC-Agent-Go, ADK-Go)
@@ -47,6 +47,27 @@ See `docs/ARCHITECTURE.md` for full design rationale, interface definitions, and
 4. **Hand-written ReAct Loop**: ~200 lines, no graph abstraction — simplest possible, best debuggability
 5. **Zero Framework Dependency**: No LangGraph, no Eino, no tRPC-Agent — only stdlib + minimal libs (zap, sqlite)
 
+## Interface Design: Boundaries vs Internals
+
+Derived from studying Eino (ByteDance) and tRPC-Agent-Go (Tencent):
+
+> **Ring boundaries use interfaces; ring internals use concrete types.**
+
+| Ring | Public Interfaces | Internal Concrete Types |
+|------|-------------------|------------------------|
+| Ring 1: LLM | `LLM` (Chat + ChatStream) | openai.Provider, anthropic.Provider |
+| Ring 2: Tool | `Tool` (Name/Desc/Schema/Execute), `ToolSet` | Registry, schema reflector |
+| Ring 3: Agent | `Agent` (Run -> iter.Seq2[Event, error]) | SimpleAgent (ReAct impl) |
+| Ring 4: Pipeline | `Gate`, `CheckpointStore` | Pipeline FSM, SQLite store |
+| Ring 5: Interface | — (entry layer) | HTTP handler, CLI |
+| Cross-cutting | `EventHandler` (OnStart/OnEnd/OnError) | callback chain |
+
+Principles:
+- Interfaces are narrow (1-3 methods). If wider, split.
+- Concrete types for orchestration logic — debuggability over abstraction.
+- Function types for lightweight strategies (e.g., `CompactFunc`, `GateFunc`).
+- Optional capabilities via type assertion, not forced interface embedding.
+
 ## Working Rules
 
 - **One feature at a time**: Pick exactly one unfinished feature from `feature_list.json`
@@ -54,6 +75,14 @@ See `docs/ARCHITECTURE.md` for full design rationale, interface definitions, and
 - **Update artifacts**: Before ending session, update `progress.md` and `feature_list.json`
 - **Stay in scope**: Don't modify files unrelated to the current feature
 - **Leave clean state**: Next session must be able to run `./init.sh` immediately
+
+## Testing Rules
+
+- **Every feature MUST include tests**: No feature is complete without corresponding `_test.go` files
+- **Table-driven tests** for pure functions (type conversion, parsing, schema generation)
+- **`httptest.NewServer`** for HTTP interaction tests — never depend on external APIs
+- **Test naming**: `TestXxx_description`, subtests via `t.Run("scenario", ...)`
+- **No test pollution**: Tests must not depend on ordering or shared mutable state
 
 ## Go Coding Standards
 
@@ -105,10 +134,11 @@ This is a **public GitHub repository**. The following categories MUST NEVER appe
 A feature is done only when ALL of the following are true:
 
 - [ ] Target behavior is implemented
+- [ ] Corresponding `_test.go` files exist with meaningful test coverage
 - [ ] `go build ./...` passes
 - [ ] `gofmt -l .` returns empty
 - [ ] `go vet ./...` passes
-- [ ] `go test ./...` passes (if tests exist)
+- [ ] `go test ./... -count=1` passes
 - [ ] Desensitization scan passes (no sensitive words)
 - [ ] Evidence recorded in `feature_list.json` or `progress.md`
 - [ ] Repository remains restartable from `./init.sh`

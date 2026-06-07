@@ -5,55 +5,55 @@
       "name": "Hello LLM",
       "goal": "Talk to an LLM with streaming output",
       "ai_skills": "LLM API, Prompt basics",
-      "go_skills": "HTTP client, SSE parsing, iter.Seq2",
+      "go_skills": "SDK integration, iter.Seq2, type conversion at boundaries",
       "features": [
         {
           "id": "M1-001",
           "name": "Project Scaffold",
           "description": "go mod init, directory structure per concentric-ring model, minimal main.go, verify go build passes",
           "dependencies": [],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "go.mod, cmd/goforge/main.go, directory structure created"
         },
         {
           "id": "M1-002",
           "name": "Message Types",
           "description": "Define provider-agnostic Message, Role, ToolCall, ToolResult, Response types in pkg/llm/",
           "dependencies": ["M1-001"],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/llm/message.go (85 lines) + message_test.go (64 lines)"
         },
         {
           "id": "M1-003",
           "name": "LLM Interface",
           "description": "Define LLM interface with Chat() and ChatStream() returning iter.Seq2[Chunk, error]. Define Option pattern.",
           "dependencies": ["M1-002"],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/llm/llm.go (25 lines) + option.go (54 lines) + option_test.go (110 lines)"
         },
         {
           "id": "M1-004",
           "name": "OpenAI-Compatible Provider",
-          "description": "Implement OpenAI-compatible provider: HTTP client, SSE stream parsing, message format conversion. Works with OpenAI, DeepSeek, Ollama.",
+          "description": "Thin adapter over openai-go SDK. Message conversion, streaming via SDK. Works with OpenAI, DeepSeek, Ollama.",
           "dependencies": ["M1-003"],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/llm/openai/provider.go (240 lines) + provider_test.go. SDK: openai/openai-go v1.12.0"
         },
         {
           "id": "M1-005",
           "name": "Anthropic Provider",
-          "description": "Implement Anthropic Claude provider: Messages API, streaming, tool_use block conversion.",
+          "description": "Thin adapter over anthropic-sdk-go. Messages API, streaming, tool_use block conversion.",
           "dependencies": ["M1-003"],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/llm/anthropic/provider.go (287 lines) + provider_test.go. SDK: anthropics/anthropic-sdk-go v1.48.0"
         },
         {
           "id": "M1-006",
           "name": "CLI Chat Demo",
           "description": "Simple CLI that reads user input, sends to LLM, prints streaming response. First runnable demo.",
           "dependencies": ["M1-004"],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "cmd/goforge/main.go (94 lines). Supports -provider, -model, -base-url, -api-key, -system flags"
         }
       ]
     },
