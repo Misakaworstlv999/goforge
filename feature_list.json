@@ -62,47 +62,47 @@
       "name": "Tool Calling",
       "goal": "Agent can define and execute typed tools",
       "ai_skills": "Function Calling, JSON Schema",
-      "go_skills": "Reflection, generics, struct tags",
+      "go_skills": "Reflection, generics, struct tags, sync.RWMutex",
       "features": [
         {
           "id": "M2-001",
           "name": "Tool Interface",
           "description": "Define Tool interface: Name(), Description(), Schema(), Execute(). Define ToolSet interface for dynamic tool collections.",
           "dependencies": ["M1-003"],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/tool/tool.go (62 lines) + tool_test.go (7 tests). Single Tool interface; ToolSet deferred to M6 MCP"
         },
         {
           "id": "M2-002",
           "name": "JSON Schema Generation",
           "description": "Implement NewTool[Args] generic constructor that generates JSON Schema from Go struct tags via reflection.",
           "dependencies": ["M2-001"],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "NewTool[Args] in pkg/tool/tool.go via invopop/jsonschema v0.14.0, DoNotReference for inline schemas"
         },
         {
           "id": "M2-003",
           "name": "Tool Registry",
           "description": "Tool registry: register/lookup by name, list all schemas for LLM request, concurrent-safe.",
           "dependencies": ["M2-002"],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/tool/registry.go (89 lines) + registry_test.go (7 tests, race-safe concurrent access)"
         },
         {
           "id": "M2-004",
           "name": "Built-in Tools: Calculator + Clock",
           "description": "Two trivial tools to validate the tool system end-to-end: calculator (add/multiply) and current time.",
           "dependencies": ["M2-003"],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/tool/builtin/calc.go + clock.go + tests (13 subtests)"
         },
         {
           "id": "M2-005",
           "name": "Tool Calling Integration",
           "description": "Wire tool schemas into LLM request, parse tool_calls from response, execute and return results. Single-step only (no loop yet).",
           "dependencies": ["M2-004", "M1-004"],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/tool/executor.go + cmd/goforge/main.go -tools mode; fix openai ToolMessage(content, toolCallID) arg order"
         }
       ]
     },

@@ -139,7 +139,7 @@ func convertMessages(msgs []llm.Message) []sdkopenai.ChatCompletionMessageParamU
 			}
 			out[i] = sdkopenai.ChatCompletionMessageParamUnion{OfAssistant: &msg}
 		case llm.RoleTool:
-			out[i] = sdkopenai.ToolMessage(m.ToolCallID, m.Content)
+			out[i] = sdkopenai.ToolMessage(m.Content, m.ToolCallID)
 		}
 	}
 	return out
