@@ -55,3 +55,6 @@ progress.md
 
 # Plan files
 *.plan.md
+
+# Claude Code local overrides (project hooks/settings committed, local overrides not)
+.claude/settings.local.json
