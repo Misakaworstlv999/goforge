@@ -1,12 +1,18 @@
 // Package config holds the cross-cutting runtime configuration for GoForge's
-// edge layer (Ring 5). It parses CLI flags and environment into a plain Config
-// struct that any entry point — CLI today, HTTP/MCP in M7 — can consume.
+// edge layer (Ring 5). It resolves settings from four layers, lowest precedence
+// first: struct defaults < .env file < process environment < CLI flags. The
+// result is a plain Config struct that any entry point — CLI today, HTTP/MCP in
+// M7 — can consume.
 package config
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -49,13 +55,45 @@ const (
 	defaultSystem      = "You are a helpful assistant. You can use tools when needed."
 	defaultMaxSteps    = 10
 	defaultToolTimeout = 30 * time.Second
+	defaultEnvFile     = ".env"
 )
 
-// Parse builds a Config from CLI args and an environment lookup function. It
-// uses a dedicated FlagSet (not the global flag package) so it is fully testable
-// and never touches os.Args directly. getenv is injected for the same reason;
-// pass os.Getenv from main.
+// Environment variable names. Non-secret app settings use a GOFORGE_ prefix;
+// API keys keep their conventional provider-specific names.
+const (
+	envProvider    = "GOFORGE_PROVIDER"
+	envModel       = "GOFORGE_MODEL"
+	envBaseURL     = "GOFORGE_BASE_URL"
+	envSystem      = "GOFORGE_SYSTEM"
+	envMode        = "GOFORGE_MODE"
+	envMaxSteps    = "GOFORGE_MAX_STEPS"
+	envToolTimeout = "GOFORGE_TOOL_TIMEOUT"
+)
+
+// Parse builds a Config from CLI args and an environment lookup function, also
+// consulting a .env file in the current directory if present. getenv is injected
+// (pass os.Getenv from main) so the function stays testable and free of global
+// state.
 func Parse(args []string, getenv func(string) string) (Config, error) {
+	return ParseWithEnvFile(args, getenv, defaultEnvFile)
+}
+
+// ParseWithEnvFile is Parse with an explicit .env path, used by tests. A missing
+// file is not an error. Precedence (low→high): defaults < .env < process env <
+// flags. Process environment wins over .env (principle of least surprise).
+func ParseWithEnvFile(args []string, getenv func(string) string, envPath string) (Config, error) {
+	dotenv, err := loadDotEnv(envPath)
+	if err != nil {
+		return Config{}, err
+	}
+	// lookup layers process env over the .env file.
+	lookup := func(key string) string {
+		if v := getenv(key); v != "" {
+			return v
+		}
+		return dotenv[key]
+	}
+
 	fs := flag.NewFlagSet("goforge", flag.ContinueOnError)
 	// Suppress the FlagSet's own usage dump on error; callers report the
 	// returned error themselves (see cmd/goforge/main.go).
@@ -76,13 +114,64 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 
+	// For any flag not explicitly set on the command line, fall back to the
+	// environment (.env or process env). Explicit flags always win.
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+
+	if !set["provider"] {
+		if v := lookup(envProvider); v != "" {
+			cfg.Provider = v
+		}
+	}
+	if !set["model"] {
+		if v := lookup(envModel); v != "" {
+			cfg.Model = v
+		}
+	}
+	if !set["base-url"] {
+		if v := lookup(envBaseURL); v != "" {
+			cfg.BaseURL = v
+		}
+	}
+	if !set["system"] {
+		if v := lookup(envSystem); v != "" {
+			cfg.System = v
+		}
+	}
+	if !set["mode"] {
+		if v := lookup(envMode); v != "" {
+			mode = v
+		}
+	}
+	if !set["max-steps"] {
+		if v := lookup(envMaxSteps); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid %s %q: %w", envMaxSteps, v, err)
+			}
+			cfg.MaxSteps = n
+		}
+	}
+	if !set["tool-timeout"] {
+		if v := lookup(envToolTimeout); v != "" {
+			d, err := time.ParseDuration(v)
+			if err != nil {
+				return Config{}, fmt.Errorf("invalid %s %q: %w", envToolTimeout, v, err)
+			}
+			cfg.ToolTimeout = d
+		}
+	}
+
 	cfg.Mode = Mode(mode)
 	if !cfg.Mode.valid() {
 		return Config{}, fmt.Errorf("invalid -mode %q: want chat, tools, or agent", mode)
 	}
 
+	// API key: explicit flag wins; otherwise resolve the provider-specific var
+	// from process env or .env.
 	if cfg.APIKey == "" {
-		cfg.APIKey = getenv(apiKeyEnv(cfg.Provider))
+		cfg.APIKey = lookup(apiKeyEnv(cfg.Provider))
 	}
 
 	return cfg, nil
@@ -97,4 +186,49 @@ func apiKeyEnv(provider string) string {
 	default:
 		return "OPENAI_API_KEY"
 	}
+}
+
+// loadDotEnv reads a .env file of KEY=VALUE lines into a map. A missing file
+// yields an empty map and no error. Blank lines and # comments are ignored, an
+// optional leading "export " is stripped, and surrounding single/double quotes
+// are removed from values. Malformed lines (no '=') are skipped.
+func loadDotEnv(path string) (map[string]string, error) {
+	m := make(map[string]string)
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return m, nil
+		}
+		return nil, fmt.Errorf("opening %s: %w", path, err)
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		m[key] = unquote(strings.TrimSpace(val))
+	}
+	return m, sc.Err()
+}
+
+// unquote strips a single pair of matching surrounding quotes, if present.
+func unquote(s string) string {
+	if len(s) >= 2 {
+		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
 }
