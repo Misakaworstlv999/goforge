@@ -118,32 +118,32 @@
           "name": "Event Types",
           "description": "Define Event sum type: ThinkEvent, ToolCallEvent, ToolResultEvent, FinalResponseEvent, ErrorEvent.",
           "dependencies": ["M2-001"],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/agent/event.go — enum EventType + tagged Event struct (reuses Ring 1 ToolCall/ToolResult/Usage) + 5 constructors + String(); event_test.go (table-driven, 11 subtests)"
         },
         {
           "id": "M3-002",
           "name": "ReAct Loop",
           "description": "Core ~200-line ReAct loop: while(tool_calls) { call LLM → execute tools → append results }. max_steps guard. Returns iter.Seq2[Event, error].",
           "dependencies": ["M3-001", "M2-005"],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/agent/agent.go SimpleAgent.Run — iter.Seq2 yield loop, maxSteps guard (default 10), ErrMaxStepsExceeded, early-break handling; agent_test.go via scripted mockLLM"
         },
         {
           "id": "M3-003",
           "name": "Parallel Tool Execution",
           "description": "When LLM returns multiple tool_calls, execute them concurrently via goroutine + errgroup. Timeout per tool.",
           "dependencies": ["M3-002"],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/tool/executor.go ExecuteParallel — errgroup, order-preserving results, per-tool context timeout, one failure doesn't cancel others; golang.org/x/sync promoted to direct dep; executor_test.go (order/failure-isolation/timeout, -race clean)"
         },
         {
           "id": "M3-004",
           "name": "Agent Interface",
           "description": "Define Agent interface with Run(ctx, task) iter.Seq2[Event, error]. Implement SimpleAgent wrapping ReAct loop.",
           "dependencies": ["M3-003"],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/agent/agent.go — Agent interface (boundary) + SimpleAgent concrete impl + functional Options (WithSystemPrompt/WithModel/WithMaxSteps/WithToolTimeout) + compile-time assertion; wired into CLI -agent mode (cmd/goforge/main.go runAgentMode/handleAgentChat)"
         },
         {
           "id": "M3-005",

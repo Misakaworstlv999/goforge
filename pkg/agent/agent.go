@@ -1,0 +1,147 @@
+package agent
+
+import (
+	"context"
+	"errors"
+	"iter"
+	"time"
+
+	"github.com/Misakaworstlv999/goforge/pkg/llm"
+	"github.com/Misakaworstlv999/goforge/pkg/tool"
+)
+
+// ErrMaxStepsExceeded is reported (as an EventError) when the ReAct loop reaches
+// its step limit without the LLM producing a final, tool-free response.
+var ErrMaxStepsExceeded = errors.New("agent: max steps exceeded")
+
+const defaultMaxSteps = 10
+
+// Agent is the Ring 3 boundary interface. It runs a task to completion, emitting
+// observations as a pull-based iterator: callers range over it and receive each
+// Event (or a terminal error) as the loop progresses.
+type Agent interface {
+	Run(ctx context.Context, task string) iter.Seq2[Event, error]
+}
+
+// SimpleAgent is the concrete ReAct implementation: think (LLM) → act (tools) →
+// observe (results) → repeat, until the LLM stops requesting tools or maxSteps
+// is reached. It is intentionally a hand-written loop with no graph abstraction.
+type SimpleAgent struct {
+	llm         llm.LLM
+	registry    *tool.Registry
+	system      string
+	model       string
+	maxSteps    int
+	toolTimeout time.Duration
+}
+
+// Option configures a SimpleAgent.
+type Option func(*SimpleAgent)
+
+// WithSystemPrompt sets the system prompt prepended to the conversation.
+func WithSystemPrompt(prompt string) Option {
+	return func(a *SimpleAgent) { a.system = prompt }
+}
+
+// WithModel sets the model name passed on each LLM call.
+func WithModel(model string) Option {
+	return func(a *SimpleAgent) { a.model = model }
+}
+
+// WithMaxSteps caps the number of think-act cycles. Non-positive values are ignored.
+func WithMaxSteps(n int) Option {
+	return func(a *SimpleAgent) {
+		if n > 0 {
+			a.maxSteps = n
+		}
+	}
+}
+
+// WithToolTimeout sets a per-tool execution deadline. Zero means no timeout.
+func WithToolTimeout(d time.Duration) Option {
+	return func(a *SimpleAgent) { a.toolTimeout = d }
+}
+
+// New constructs a SimpleAgent over the given LLM client and tool registry.
+func New(client llm.LLM, registry *tool.Registry, opts ...Option) *SimpleAgent {
+	a := &SimpleAgent{
+		llm:      client,
+		registry: registry,
+		maxSteps: defaultMaxSteps,
+	}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a
+}
+
+// compile-time assertion that SimpleAgent satisfies the Agent boundary.
+var _ Agent = (*SimpleAgent)(nil)
+
+// Run executes the ReAct loop for task and returns an iterator of events. The
+// iterator yields Think/ToolCall/ToolResult events as the loop progresses and
+// terminates with exactly one Response (success) or Error (failure) event. If
+// the consumer stops early (breaks the range), the loop returns promptly.
+func (a *SimpleAgent) Run(ctx context.Context, task string) iter.Seq2[Event, error] {
+	return func(yield func(Event, error) bool) {
+		messages := make([]llm.Message, 0, 4)
+		if a.system != "" {
+			messages = append(messages, llm.SystemMessage(a.system))
+		}
+		messages = append(messages, llm.UserMessage(task))
+
+		chatOpts := a.chatOpts()
+
+		for step := 0; step < a.maxSteps; step++ {
+			resp, err := a.llm.Chat(ctx, messages, chatOpts...)
+			if err != nil {
+				yield(ErrorEvent(err, step), err)
+				return
+			}
+			messages = append(messages, resp.Message)
+
+			// Surface any reasoning text the model produced this step.
+			if resp.Message.Content != "" {
+				if !yield(ThinkEvent(resp.Message.Content, &resp.Usage, step), nil) {
+					return
+				}
+			}
+
+			// Terminal: no tool calls means this is the final answer.
+			if resp.StopReason != llm.StopReasonToolCall || len(resp.Message.ToolCalls) == 0 {
+				yield(ResponseEvent(resp.Message.Content, &resp.Usage, step), nil)
+				return
+			}
+
+			// Act: announce each requested tool call.
+			for _, tc := range resp.Message.ToolCalls {
+				if !yield(ToolCallEvent(tc, step), nil) {
+					return
+				}
+			}
+
+			// Execute concurrently; one failure does not cancel the others.
+			results := tool.ExecuteParallel(ctx, a.registry, resp.Message.ToolCalls, a.toolTimeout)
+
+			// Observe: feed every result back into the conversation.
+			for _, r := range results {
+				if !yield(ToolResultEvent(r, step), nil) {
+					return
+				}
+				messages = append(messages, llm.ToolMessage(r.CallID, r.Content))
+			}
+		}
+
+		yield(ErrorEvent(ErrMaxStepsExceeded, a.maxSteps), ErrMaxStepsExceeded)
+	}
+}
+
+// chatOpts builds the per-call LLM options: registered tool schemas plus an
+// optional model override.
+func (a *SimpleAgent) chatOpts() []llm.Option {
+	opts := []llm.Option{llm.WithTools(a.registry.Schemas()...)}
+	if a.model != "" {
+		opts = append(opts, llm.WithModel(a.model))
+	}
+	return opts
+}
