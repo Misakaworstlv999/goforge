@@ -1,6 +1,6 @@
 #!/bin/bash
 # Remind to update artifacts before ending session.
-PROJECT_DIR="/Users/fengmoyuan/GolandProjects/goforge"
+PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$PROJECT_DIR" 2>/dev/null || exit 0
 
 DIRTY=$(git status --porcelain 2>/dev/null)
