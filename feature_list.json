@@ -150,8 +150,8 @@
           "name": "Built-in Tools: File + Shell",
           "description": "File read/write/list and shell exec tools with basic sandboxing (allowed dirs, command allowlist).",
           "dependencies": ["M2-002"],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/tool/builtin/sandbox.go (resolvePath: filepath.Rel containment + EvalSymlinks anti-escape; command allowlist), file.go (read_file/write_file/list_files), shell.go (exec_command, no-shell exec + per-call timeout + output cap). Wired into CLI: file tools always on (rooted at -workdir/cwd), exec_command opt-in via -allow-commands. Tests cover traversal/symlink-escape/allowlist/timeout under -race"
         }
       ]
     },

@@ -48,6 +48,11 @@ type Config struct {
 	Mode        Mode
 	MaxSteps    int
 	ToolTimeout time.Duration
+	// Workdir is the sandbox root for file/shell tools. Empty means the current
+	// working directory, resolved by the composition layer.
+	Workdir string
+	// AllowCommands is the shell command allowlist. Empty disables exec_command.
+	AllowCommands []string
 }
 
 // Default values shared by Parse and tests.
@@ -61,13 +66,15 @@ const (
 // Environment variable names. Non-secret app settings use a GOFORGE_ prefix;
 // API keys keep their conventional provider-specific names.
 const (
-	envProvider    = "GOFORGE_PROVIDER"
-	envModel       = "GOFORGE_MODEL"
-	envBaseURL     = "GOFORGE_BASE_URL"
-	envSystem      = "GOFORGE_SYSTEM"
-	envMode        = "GOFORGE_MODE"
-	envMaxSteps    = "GOFORGE_MAX_STEPS"
-	envToolTimeout = "GOFORGE_TOOL_TIMEOUT"
+	envProvider      = "GOFORGE_PROVIDER"
+	envModel         = "GOFORGE_MODEL"
+	envBaseURL       = "GOFORGE_BASE_URL"
+	envSystem        = "GOFORGE_SYSTEM"
+	envMode          = "GOFORGE_MODE"
+	envMaxSteps      = "GOFORGE_MAX_STEPS"
+	envToolTimeout   = "GOFORGE_TOOL_TIMEOUT"
+	envWorkdir       = "GOFORGE_WORKDIR"
+	envAllowCommands = "GOFORGE_ALLOW_COMMANDS"
 )
 
 // Parse builds a Config from CLI args and an environment lookup function, also
@@ -101,6 +108,7 @@ func ParseWithEnvFile(args []string, getenv func(string) string, envPath string)
 
 	var cfg Config
 	var mode string
+	var allowCommands string
 	fs.StringVar(&cfg.Provider, "provider", "openai", "LLM provider: openai or anthropic")
 	fs.StringVar(&cfg.Model, "model", "", "Model name (e.g., gpt-4o, claude-sonnet-4-20250514)")
 	fs.StringVar(&cfg.BaseURL, "base-url", "", "Custom API base URL")
@@ -109,6 +117,8 @@ func ParseWithEnvFile(args []string, getenv func(string) string, envPath string)
 	fs.StringVar(&mode, "mode", string(ModeAgent), "Interactive mode: chat | tools | agent")
 	fs.IntVar(&cfg.MaxSteps, "max-steps", defaultMaxSteps, "Max ReAct steps (agent mode only)")
 	fs.DurationVar(&cfg.ToolTimeout, "tool-timeout", defaultToolTimeout, "Per-tool execution timeout (agent mode only)")
+	fs.StringVar(&cfg.Workdir, "workdir", "", "Sandbox root directory for file/shell tools (default: current directory)")
+	fs.StringVar(&allowCommands, "allow-commands", "", "Comma-separated shell command allowlist; empty disables exec_command")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -162,6 +172,17 @@ func ParseWithEnvFile(args []string, getenv func(string) string, envPath string)
 			cfg.ToolTimeout = d
 		}
 	}
+	if !set["workdir"] {
+		if v := lookup(envWorkdir); v != "" {
+			cfg.Workdir = v
+		}
+	}
+	if !set["allow-commands"] {
+		if v := lookup(envAllowCommands); v != "" {
+			allowCommands = v
+		}
+	}
+	cfg.AllowCommands = splitCommaList(allowCommands)
 
 	cfg.Mode = Mode(mode)
 	if !cfg.Mode.valid() {
@@ -175,6 +196,21 @@ func ParseWithEnvFile(args []string, getenv func(string) string, envPath string)
 	}
 
 	return cfg, nil
+}
+
+// splitCommaList parses a comma-separated list into trimmed, non-empty items.
+// Returns nil for an empty string so callers can treat "unset" uniformly.
+func splitCommaList(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // apiKeyEnv returns the environment variable name that holds the API key for the

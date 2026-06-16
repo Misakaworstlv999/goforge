@@ -134,6 +134,51 @@ func TestParse_overrides(t *testing.T) {
 	}
 }
 
+func TestParse_sandboxFields(t *testing.T) {
+	t.Run("flags", func(t *testing.T) {
+		cfg, err := Parse([]string{"-workdir", "/tmp/work", "-allow-commands", "echo, ls , , go"}, noEnv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Workdir != "/tmp/work" {
+			t.Errorf("Workdir = %q", cfg.Workdir)
+		}
+		want := []string{"echo", "ls", "go"}
+		if len(cfg.AllowCommands) != len(want) {
+			t.Fatalf("AllowCommands = %v, want %v", cfg.AllowCommands, want)
+		}
+		for i, w := range want {
+			if cfg.AllowCommands[i] != w {
+				t.Errorf("AllowCommands[%d] = %q, want %q (trim + skip empties)", i, cfg.AllowCommands[i], w)
+			}
+		}
+	})
+
+	t.Run("default empty allowlist is nil", func(t *testing.T) {
+		cfg, err := Parse(nil, noEnv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.AllowCommands != nil {
+			t.Errorf("AllowCommands = %v, want nil", cfg.AllowCommands)
+		}
+	})
+
+	t.Run("from env", func(t *testing.T) {
+		env := writeEnvFile(t, "GOFORGE_WORKDIR=/srv/app\nGOFORGE_ALLOW_COMMANDS=cat,grep\n")
+		cfg, err := ParseWithEnvFile(nil, noEnv, env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Workdir != "/srv/app" {
+			t.Errorf("Workdir = %q", cfg.Workdir)
+		}
+		if len(cfg.AllowCommands) != 2 || cfg.AllowCommands[0] != "cat" || cfg.AllowCommands[1] != "grep" {
+			t.Errorf("AllowCommands = %v", cfg.AllowCommands)
+		}
+	})
+}
+
 func TestParse_invalidFlag(t *testing.T) {
 	if _, err := Parse([]string{"-nope"}, noEnv); err == nil {
 		t.Error("expected error for unknown flag")

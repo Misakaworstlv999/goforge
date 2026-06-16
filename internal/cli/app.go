@@ -6,11 +6,15 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"os"
 
 	"github.com/Misakaworstlv999/goforge/internal/config"
 	"github.com/Misakaworstlv999/goforge/pkg/agent"
 	"github.com/Misakaworstlv999/goforge/pkg/llm"
+	"github.com/Misakaworstlv999/goforge/pkg/tool"
+	"github.com/Misakaworstlv999/goforge/pkg/tool/builtin"
 )
 
 // App is the composed CLI application: a configuration, an LLM client built from
@@ -34,24 +38,57 @@ func newWithClient(cfg config.Config, client llm.LLM, out io.Writer) *App {
 // Run selects the turn handler for the configured mode and drives the shared
 // REPL reading from in until EOF or "exit".
 func (a *App) Run(ctx context.Context, in io.Reader) error {
-	t := a.turnForMode(ctx)
-	return repl(in, a.out, banner(a.cfg.Mode, a.cfg.MaxSteps), t)
+	t, bannerText := a.turnForMode(ctx)
+	return repl(in, a.out, bannerText, t)
 }
 
-// turnForMode builds the per-line handler for the configured mode, setting up
-// any state (registry, agent) the mode needs exactly once.
-func (a *App) turnForMode(ctx context.Context) turn {
+// turnForMode builds the per-line handler and banner for the configured mode,
+// setting up any state (registry, agent) the mode needs exactly once.
+func (a *App) turnForMode(ctx context.Context) (turn, string) {
 	switch a.cfg.Mode {
 	case config.ModeTools:
-		return toolsTurn(ctx, a.client, newToolRegistry(), a.out, a.cfg.System)
+		reg := a.buildRegistry()
+		return toolsTurn(ctx, a.client, reg, a.out, a.cfg.System), banner(a.cfg.Mode, a.cfg.MaxSteps, reg)
 	case config.ModeAgent:
-		agt := agent.New(a.client, newToolRegistry(),
+		reg := a.buildRegistry()
+		agt := agent.New(a.client, reg,
 			agent.WithSystemPrompt(a.cfg.System),
 			agent.WithMaxSteps(a.cfg.MaxSteps),
 			agent.WithToolTimeout(a.cfg.ToolTimeout),
 		)
-		return agentTurn(ctx, agt, a.out)
+		return agentTurn(ctx, agt, a.out), banner(a.cfg.Mode, a.cfg.MaxSteps, reg)
 	default:
-		return chatTurn(ctx, a.client, a.out, a.cfg.System)
+		return chatTurn(ctx, a.client, a.out, a.cfg.System), banner(a.cfg.Mode, a.cfg.MaxSteps, nil)
 	}
+}
+
+// buildRegistry assembles the toolset: calculator + clock always, file tools
+// (read/write/list) sandboxed to the workdir, and exec_command only when a
+// command allowlist is configured (arbitrary exec is opt-in). If the sandbox
+// cannot be created the file/shell tools are skipped with a warning.
+func (a *App) buildRegistry() *tool.Registry {
+	reg := tool.NewRegistry()
+	_ = reg.Register(builtin.NewCalculator(), builtin.NewClock())
+
+	workdir := a.cfg.Workdir
+	if workdir == "" {
+		if wd, err := os.Getwd(); err == nil {
+			workdir = wd
+		}
+	}
+
+	sb, err := builtin.NewSandbox([]string{workdir},
+		builtin.WithAllowedCommands(a.cfg.AllowCommands...),
+		builtin.WithCommandTimeout(a.cfg.ToolTimeout),
+	)
+	if err != nil {
+		fmt.Fprintf(a.out, "warning: file/shell tools disabled: %v\n", err)
+		return reg
+	}
+
+	_ = reg.Register(builtin.NewReadFile(sb), builtin.NewWriteFile(sb), builtin.NewListFiles(sb))
+	if len(a.cfg.AllowCommands) > 0 {
+		_ = reg.Register(builtin.NewExecCommand(sb))
+	}
+	return reg
 }

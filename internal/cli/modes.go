@@ -10,20 +10,11 @@ import (
 	"github.com/Misakaworstlv999/goforge/pkg/agent"
 	"github.com/Misakaworstlv999/goforge/pkg/llm"
 	"github.com/Misakaworstlv999/goforge/pkg/tool"
-	"github.com/Misakaworstlv999/goforge/pkg/tool/builtin"
 )
 
 // A turn handles a single line of user input within a mode's REPL. Each mode
 // builds a turn closure that captures its own conversation state.
 type turn func(line string)
-
-// newToolRegistry returns the builtin toolset used by tools/agent modes.
-func newToolRegistry() *tool.Registry {
-	reg := tool.NewRegistry()
-	// Register returns an error only on duplicate names, impossible here.
-	_ = reg.Register(builtin.NewCalculator(), builtin.NewClock())
-	return reg
-}
 
 // chatTurn (M1): plain streaming chat with no tools. It keeps a running message
 // history so the conversation is multi-turn.
@@ -125,16 +116,33 @@ func renderAgentEvent(out io.Writer, ev agent.Event, err error) {
 	}
 }
 
-// banner returns the introductory line(s) for a mode.
-func banner(mode config.Mode, maxSteps int) string {
+// banner returns the introductory line(s) for a mode. When a registry is
+// provided its tool names are listed so the user sees exactly what's available.
+func banner(mode config.Mode, maxSteps int, reg *tool.Registry) string {
 	switch mode {
 	case config.ModeTools:
-		return "GoForge — Tool Calling Mode (type 'exit' to quit)\n" +
-			"Available tools: calculator, current_time\n---"
+		return fmt.Sprintf("GoForge — Tool Calling Mode (type 'exit' to quit)\n"+
+			"Available tools: %s\n---", toolNames(reg))
 	case config.ModeAgent:
 		return fmt.Sprintf("GoForge — ReAct Agent Mode (type 'exit' to quit)\n"+
-			"Available tools: calculator, current_time | max steps: %d\n---", maxSteps)
+			"Available tools: %s | max steps: %d\n---", toolNames(reg), maxSteps)
 	default:
 		return "GoForge — Chat Mode (type 'exit' to quit)\n---"
 	}
+}
+
+// toolNames returns a comma-separated, sorted list of the registry's tool names.
+func toolNames(reg *tool.Registry) string {
+	if reg == nil {
+		return "(none)"
+	}
+	schemas := reg.Schemas() // already sorted by name
+	names := make([]string, len(schemas))
+	for i, s := range schemas {
+		names[i] = s.Name
+	}
+	if len(names) == 0 {
+		return "(none)"
+	}
+	return strings.Join(names, ", ")
 }
