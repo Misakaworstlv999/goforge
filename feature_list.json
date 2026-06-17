@@ -230,7 +230,7 @@
         {
           "id": "M5-003",
           "name": "Checkpoint Store",
-          "description": "SQLite-backed checkpoint: serialize PipelineState via gob, save/restore on stage transitions. Pipeline survives process restarts.",
+          "description": "SQLite-backed checkpoint: serialize PipelineState via gob, save/restore on stage transitions. Pipeline survives process restarts. MUST persist the FULL conversation history (durable log), not just FSM state — so M4 compaction becomes a lossy *projection* sent to the model, while the original remains recoverable. Add the deferred ContextPolicy.OnEvict hook here (compaction writes evicted/truncated content to this store before dropping it). Separates 'what is sent' (reduced) from 'what is stored' (lossless), matching Eino/tRPC/ADK.",
           "dependencies": ["M5-002"],
           "status": "not-started",
           "evidence": ""
@@ -402,7 +402,7 @@
         {
           "id": "M8-004",
           "name": "Memory Integration (ContextSource + Tool)",
-          "description": "Expose retrieval as a ContextSource (automatic pre-step injection) AND as memory_search / memory_add tools (agent-driven). Reuses the M4-005 seam + Ring 2 Tool.",
+          "description": "Expose retrieval as a ContextSource (automatic pre-step injection) AND as memory_search / memory_add tools (agent-driven). Reuses the M4-005 seam + Ring 2 Tool. ALSO provide a retrieval tool for compaction-offloaded content (Eino offload+ReadFileTool pattern): content evicted by M4 compaction (via the M5-003 OnEvict store) is embedded/indexed so the agent can pull it back on demand — turning lossy compaction into 'moved to cold storage, recoverable' rather than data loss.",
           "dependencies": ["M8-003", "M4-005", "M2-003"],
           "status": "not-started",
           "evidence": ""
