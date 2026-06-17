@@ -50,7 +50,10 @@ func newMCPTool(s session, mt *mcpsdk.Tool, prefix string) (tool.Tool, error) {
 	}
 	display := mt.Name
 	if prefix != "" {
-		display = prefix + "_" + mt.Name
+		// Prefix comes from the mcpServers config key (e.g. "km-corp"). LLM
+		// providers and models consistently normalize hyphens to underscores in
+		// tool names, so register with underscores to match what the model calls.
+		display = strings.ReplaceAll(prefix, "-", "_") + "_" + mt.Name
 	}
 	safeName := sanitizeToolName(display)
 	return &mcpTool{

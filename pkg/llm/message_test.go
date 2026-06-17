@@ -33,7 +33,7 @@ func TestAssistantMessage(t *testing.T) {
 }
 
 func TestToolMessage(t *testing.T) {
-	m := ToolMessage("call_123", `{"result": 42}`)
+	m := ToolMessage("call_123", `{"result": 42}`, false)
 	if m.Role != RoleTool {
 		t.Errorf("got role %q, want %q", m.Role, RoleTool)
 	}

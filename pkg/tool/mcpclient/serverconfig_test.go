@@ -183,6 +183,17 @@ func TestNewMCPTool_prefix(t *testing.T) {
 	if tl.Name() != "filesystem_read_file" {
 		t.Errorf("prefixed name = %q, want filesystem_read_file", tl.Name())
 	}
+	// Hyphens in the server key become underscores in the LLM-facing name.
+	tl3, err := newMCPTool(nil, &mcpsdk.Tool{Name: "getArticleDetail", Description: "d"}, "km-corp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tl3.Name(); got != "km_corp_getArticleDetail" {
+		t.Errorf("hyphenated prefix name = %q, want km_corp_getArticleDetail", got)
+	}
+	if got := tl3.Schema().Name; got != "km_corp_getArticleDetail" {
+		t.Errorf("schema name = %q, want km_corp_getArticleDetail", got)
+	}
 	// No prefix ⇒ bare (sanitized) name.
 	tl2, _ := newMCPTool(nil, mt, "")
 	if tl2.Name() != "read_file" {

@@ -166,7 +166,7 @@ func (a *SimpleAgent) Run(ctx context.Context, task string) iter.Seq2[Event, err
 				if !yield(ToolResultEvent(r, step), nil) {
 					return
 				}
-				messages = append(messages, llm.ToolMessage(r.CallID, r.Content))
+				messages = append(messages, llm.ToolMessage(r.CallID, r.Content, r.IsError))
 			}
 
 			// Budget check: prefer the provider's real token count, fall back to

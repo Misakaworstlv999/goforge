@@ -66,7 +66,7 @@ func toolsTurn(ctx context.Context, client llm.LLM, reg *tool.Registry, out io.W
 		results := tool.ExecuteAll(ctx, reg, resp.Message.ToolCalls)
 		for _, r := range results {
 			renderToolResult(out, r)
-			messages = append(messages, llm.ToolMessage(r.CallID, r.Content))
+			messages = append(messages, llm.ToolMessage(r.CallID, r.Content, r.IsError))
 		}
 
 		final, err := client.Chat(ctx, messages, llm.WithTools(reg.Schemas()...))

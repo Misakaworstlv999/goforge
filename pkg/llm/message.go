@@ -16,6 +16,7 @@ type Message struct {
 	Content    string     `json:"content,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+	IsError    bool       `json:"is_error,omitempty"` // tool result: true when execution failed
 }
 
 // ToolCall represents an LLM-initiated function call request.
@@ -78,7 +79,8 @@ func AssistantMessage(content string) Message {
 	return Message{Role: RoleAssistant, Content: content}
 }
 
-// ToolMessage creates a tool result message.
-func ToolMessage(callID, content string) Message {
-	return Message{Role: RoleTool, Content: content, ToolCallID: callID}
+// ToolMessage creates a tool result message. Set isError when the tool failed
+// so providers can mark the result as an error for the model to retry.
+func ToolMessage(callID, content string, isError bool) Message {
+	return Message{Role: RoleTool, Content: content, ToolCallID: callID, IsError: isError}
 }

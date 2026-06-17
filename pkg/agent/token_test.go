@@ -20,7 +20,7 @@ func TestEstimator_Count(t *testing.T) {
 			Role:      llm.RoleAssistant,
 			ToolCalls: []llm.ToolCall{{ID: "c1", Name: "calculator", Args: `{"a":1}`}},
 		}}, false},
-		{"tool result", []llm.Message{llm.ToolMessage("c1", "42")}, false},
+		{"tool result", []llm.Message{llm.ToolMessage("c1", "42", false)}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

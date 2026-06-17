@@ -83,7 +83,7 @@ func buildHistory(rounds int) []llm.Message {
 			Content:   "thinking step " + id,
 			ToolCalls: []llm.ToolCall{{ID: id, Name: "calculator", Args: `{"a":1,"b":2,"op":"add"}`}},
 		})
-		msgs = append(msgs, llm.ToolMessage(id, "result "+id+" "+pad))
+		msgs = append(msgs, llm.ToolMessage(id, "result "+id+" "+pad, false))
 	}
 	msgs = append(msgs, llm.AssistantMessage("final-ish answer"))
 	return msgs

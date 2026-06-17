@@ -154,7 +154,7 @@ func convertMessages(msgs []llm.Message) ([]sdkanthropic.MessageParam, []sdkanth
 
 		case llm.RoleTool:
 			apiMessages = append(apiMessages, sdkanthropic.NewUserMessage(
-				sdkanthropic.NewToolResultBlock(m.ToolCallID, m.Content, false),
+				sdkanthropic.NewToolResultBlock(m.ToolCallID, m.Content, m.IsError),
 			))
 		}
 	}

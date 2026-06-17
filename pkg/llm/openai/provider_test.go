@@ -166,6 +166,47 @@ func TestChatStream_textDeltas(t *testing.T) {
 	}
 }
 
+func TestBuildParams_toolNamesInRequest(t *testing.T) {
+	var sentNames []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Tools []struct {
+				Function struct {
+					Name string `json:"name"`
+				} `json:"function"`
+			} `json:"tools"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		for _, tool := range body.Tools {
+			sentNames = append(sentNames, tool.Function.Name)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message":       map[string]any{"role": "assistant", "content": "ok"},
+				"finish_reason": "stop",
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	p := New(Config{BaseURL: srv.URL + "/v1", Model: "gpt-4o"})
+	_, err := p.Chat(context.Background(),
+		[]llm.Message{llm.UserMessage("hi")},
+		llm.WithTools(llm.ToolSchema{
+			Name:        "km_corp_getArticleDetail",
+			Description: "read KM article",
+			Parameters:  map[string]any{"type": "object"},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if len(sentNames) != 1 || sentNames[0] != "km_corp_getArticleDetail" {
+		t.Fatalf("tool names sent to API = %v, want [km_corp_getArticleDetail]", sentNames)
+	}
+}
+
 func TestConvertFinishReason(t *testing.T) {
 	tests := []struct {
 		input string
