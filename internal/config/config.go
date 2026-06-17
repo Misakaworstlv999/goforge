@@ -54,6 +54,10 @@ type Config struct {
 	Workdirs []string
 	// AllowCommands is the shell command allowlist. Empty disables exec_command.
 	AllowCommands []string
+	// MCPServers lists external MCP servers to connect (stdio). Each entry is a
+	// command line, e.g. "npx -y @modelcontextprotocol/server-filesystem /path".
+	// Their tools are discovered and registered alongside the builtins.
+	MCPServers []string
 }
 
 // Default values shared by Parse and tests.
@@ -76,6 +80,7 @@ const (
 	envToolTimeout   = "GOFORGE_TOOL_TIMEOUT"
 	envWorkdir       = "GOFORGE_WORKDIR"
 	envAllowCommands = "GOFORGE_ALLOW_COMMANDS"
+	envMCPServers    = "GOFORGE_MCP_SERVERS"
 )
 
 // Parse builds a Config from CLI args and an environment lookup function, also
@@ -111,6 +116,7 @@ func ParseWithEnvFile(args []string, getenv func(string) string, envPath string)
 	var mode string
 	var allowCommands string
 	var workdirs string
+	var mcpServers string
 	fs.StringVar(&cfg.Provider, "provider", "openai", "LLM provider: openai or anthropic")
 	fs.StringVar(&cfg.Model, "model", "", "Model name (e.g., gpt-4o, claude-sonnet-4-20250514)")
 	fs.StringVar(&cfg.BaseURL, "base-url", "", "Custom API base URL")
@@ -121,6 +127,7 @@ func ParseWithEnvFile(args []string, getenv func(string) string, envPath string)
 	fs.DurationVar(&cfg.ToolTimeout, "tool-timeout", defaultToolTimeout, "Per-tool execution timeout (agent mode only)")
 	fs.StringVar(&workdirs, "workdirs", "", "Comma-separated sandbox root directories for file/shell tools (default: current directory)")
 	fs.StringVar(&allowCommands, "allow-commands", "", "Comma-separated shell command allowlist; empty disables exec_command")
+	fs.StringVar(&mcpServers, "mcp-servers", "", "Comma-separated MCP server commands (stdio), e.g. \"npx -y @modelcontextprotocol/server-filesystem /path\"")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -184,8 +191,14 @@ func ParseWithEnvFile(args []string, getenv func(string) string, envPath string)
 			allowCommands = v
 		}
 	}
+	if !set["mcp-servers"] {
+		if v := lookup(envMCPServers); v != "" {
+			mcpServers = v
+		}
+	}
 	cfg.Workdirs = splitCommaList(workdirs)
 	cfg.AllowCommands = splitCommaList(allowCommands)
+	cfg.MCPServers = splitCommaList(mcpServers)
 
 	cfg.Mode = Mode(mode)
 	if !cfg.Mode.valid() {

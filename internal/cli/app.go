@@ -9,20 +9,23 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/Misakaworstlv999/goforge/internal/config"
 	"github.com/Misakaworstlv999/goforge/pkg/agent"
 	"github.com/Misakaworstlv999/goforge/pkg/llm"
 	"github.com/Misakaworstlv999/goforge/pkg/tool"
 	"github.com/Misakaworstlv999/goforge/pkg/tool/builtin"
+	"github.com/Misakaworstlv999/goforge/pkg/tool/mcpclient"
 )
 
 // App is the composed CLI application: a configuration, an LLM client built from
 // it, and an output sink. Construct it with New and drive it with Run.
 type App struct {
-	cfg    config.Config
-	client llm.LLM
-	out    io.Writer
+	cfg     config.Config
+	client  llm.LLM
+	out     io.Writer
+	closers []io.Closer // MCP clients to tear down on exit
 }
 
 // New builds an App, constructing the LLM client from cfg via NewLLM.
@@ -39,7 +42,15 @@ func newWithClient(cfg config.Config, client llm.LLM, out io.Writer) *App {
 // REPL reading from in until EOF or "exit".
 func (a *App) Run(ctx context.Context, in io.Reader) error {
 	t, bannerText := a.turnForMode(ctx)
+	defer a.closeAll()
 	return repl(in, a.out, bannerText, t)
+}
+
+// closeAll tears down any connected MCP clients.
+func (a *App) closeAll() {
+	for _, c := range a.closers {
+		_ = c.Close()
+	}
 }
 
 // turnForMode builds the per-line handler and banner for the configured mode,
@@ -47,10 +58,10 @@ func (a *App) Run(ctx context.Context, in io.Reader) error {
 func (a *App) turnForMode(ctx context.Context) (turn, string) {
 	switch a.cfg.Mode {
 	case config.ModeTools:
-		reg := a.buildRegistry()
+		reg := a.buildRegistry(ctx)
 		return toolsTurn(ctx, a.client, reg, a.out, a.cfg.System), banner(a.cfg.Mode, a.cfg.MaxSteps, reg)
 	case config.ModeAgent:
-		reg := a.buildRegistry()
+		reg := a.buildRegistry(ctx)
 		agt := agent.New(a.client, reg,
 			agent.WithSystemPrompt(a.cfg.System),
 			agent.WithMaxSteps(a.cfg.MaxSteps),
@@ -66,7 +77,7 @@ func (a *App) turnForMode(ctx context.Context) (turn, string) {
 // (read/write/list) sandboxed to the configured workdirs, and exec_command only
 // when a command allowlist is configured (arbitrary exec is opt-in). If the
 // sandbox cannot be created the file/shell tools are skipped with a warning.
-func (a *App) buildRegistry() *tool.Registry {
+func (a *App) buildRegistry(ctx context.Context) *tool.Registry {
 	reg := tool.NewRegistry()
 	_ = reg.Register(builtin.NewCalculator(), builtin.NewClock())
 
@@ -83,12 +94,40 @@ func (a *App) buildRegistry() *tool.Registry {
 	)
 	if err != nil {
 		fmt.Fprintf(a.out, "warning: file/shell tools disabled: %v\n", err)
-		return reg
+	} else {
+		_ = reg.Register(builtin.NewReadFile(sb), builtin.NewWriteFile(sb), builtin.NewListFiles(sb))
+		if len(a.cfg.AllowCommands) > 0 {
+			_ = reg.Register(builtin.NewExecCommand(sb))
+		}
 	}
 
-	_ = reg.Register(builtin.NewReadFile(sb), builtin.NewWriteFile(sb), builtin.NewListFiles(sb))
-	if len(a.cfg.AllowCommands) > 0 {
-		_ = reg.Register(builtin.NewExecCommand(sb))
-	}
+	a.registerMCPServers(ctx, reg)
 	return reg
+}
+
+// registerMCPServers connects each configured MCP server (stdio) and registers
+// its tools. A server that fails to connect is skipped with a warning so it
+// can't take down the rest of the toolset.
+func (a *App) registerMCPServers(ctx context.Context, reg *tool.Registry) {
+	for _, spec := range a.cfg.MCPServers {
+		fields := strings.Fields(spec)
+		if len(fields) == 0 {
+			continue
+		}
+		client, err := mcpclient.New(ctx, mcpclient.Config{
+			Kind:    mcpclient.Stdio,
+			Command: fields[0],
+			Args:    fields[1:],
+		})
+		if err != nil {
+			fmt.Fprintf(a.out, "warning: MCP server %q disabled: %v\n", fields[0], err)
+			continue
+		}
+		if err := reg.RegisterSet(ctx, client); err != nil {
+			fmt.Fprintf(a.out, "warning: MCP server %q tools skipped: %v\n", fields[0], err)
+			_ = client.Close()
+			continue
+		}
+		a.closers = append(a.closers, client)
+	}
 }

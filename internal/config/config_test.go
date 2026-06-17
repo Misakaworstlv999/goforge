@@ -188,6 +188,34 @@ func TestParse_sandboxFields(t *testing.T) {
 	})
 }
 
+func TestParse_mcpServers(t *testing.T) {
+	t.Run("flag", func(t *testing.T) {
+		cfg, err := Parse([]string{"-mcp-servers", "npx server-fs /tmp, mcp-git"}, noEnv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cfg.MCPServers) != 2 || cfg.MCPServers[0] != "npx server-fs /tmp" || cfg.MCPServers[1] != "mcp-git" {
+			t.Errorf("MCPServers = %#v", cfg.MCPServers)
+		}
+	})
+	t.Run("env", func(t *testing.T) {
+		env := writeEnvFile(t, "GOFORGE_MCP_SERVERS=cmd-a,cmd-b\n")
+		cfg, err := ParseWithEnvFile(nil, noEnv, env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cfg.MCPServers) != 2 {
+			t.Errorf("MCPServers = %#v", cfg.MCPServers)
+		}
+	})
+	t.Run("default nil", func(t *testing.T) {
+		cfg, _ := Parse(nil, noEnv)
+		if cfg.MCPServers != nil {
+			t.Errorf("MCPServers = %#v, want nil", cfg.MCPServers)
+		}
+	})
+}
+
 func TestParse_invalidFlag(t *testing.T) {
 	if _, err := Parse([]string{"-nope"}, noEnv); err == nil {
 		t.Error("expected error for unknown flag")
