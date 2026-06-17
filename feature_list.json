@@ -167,32 +167,40 @@
           "name": "Token Counter",
           "description": "Token counting utility (tiktoken-go or simple word-based estimator). Counts messages, tool results, system prompts.",
           "dependencies": ["M1-002"],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/agent/token.go — TokenCounter interface + Estimator with configurable RunesPerToken (default 4; CJK ~2, required for Chinese content); tiktoken avoided (CGO/BPE vs no-CGO). Runtime budget uses real llm.Usage, estimator is fallback. token_test.go"
         },
         {
           "id": "M4-002",
           "name": "ContextPolicy",
-          "description": "Define ContextPolicy struct: MaxTokens, Sources (enum), Breadth (wide/narrow), Depth (shallow/deep). Agents are configured with a policy.",
+          "description": "Define ContextPolicy struct: MaxTokens, Sources ([]ContextSource func type — the pluggable seam for retrieval-augmented context incl. future long-term memory / vector retrieval, see M8), Breadth, Depth, RetainRecent, Compact (CompactFunc), Counter. Agents configured via WithContextPolicy.",
           "dependencies": ["M4-001"],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/agent/context.go — ContextPolicy + Breadth/Depth enums + ContextSource/CompactFunc func types; zero value disables (preserves baseline). context_test.go"
         },
         {
           "id": "M4-003",
           "name": "Three-Tier Compaction",
           "description": "Budget check (drop oldest tool results) → micro-compact (truncate long outputs) → full compaction (LLM-based summarization). Inspired by Claude Code.",
           "dependencies": ["M4-002", "M3-002"],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/agent/context.go DefaultCompact — middle-out, round-atomic (never orphans tool_call/result, which OpenAI/Anthropic reject); preserves system + first user + RetainRecent tail; best-effort termination. Tests assert no-orphan-pairing + live validation in agent loop"
         },
         {
           "id": "M4-004",
           "name": "System Prompt Engineering",
           "description": "Configurable system prompt builder: role definition + stage instructions + tool descriptions + context policy directives.",
           "dependencies": ["M4-002"],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/agent/prompt.go BuildSystemPrompt(role, tools, policy) — role + sorted tool list + breadth/depth strategy hint; pure & deterministic (cache-friendly). prompt_test.go"
+        },
+        {
+          "id": "M4-005",
+          "name": "ContextSource Seam",
+          "description": "Wire ContextPolicy.Sources into SimpleAgent.Run (load + inject before task) + StaticSource trivial impl. The concrete integration point for long-term memory / retrieval (M8). Source failure aborts the run (strict).",
+          "dependencies": ["M4-002"],
+          "status": "done",
+          "evidence": "pkg/agent/agent.go WithContextPolicy + Run injects sources after system/before task; StaticSource in context.go; agent_test.go covers injection order + strict-abort-on-source-error"
         }
       ]
     },
@@ -354,6 +362,56 @@
           "name": "README and Documentation",
           "description": "Complete README with architecture diagram, quickstart, API reference. Ensure all docs pass desensitization scan.",
           "dependencies": ["M6-005"],
+          "status": "not-started",
+          "evidence": ""
+        }
+      ]
+    },
+    {
+      "id": "M8",
+      "name": "Long-term Memory & Retrieval",
+      "goal": "Cross-session persistent memory + semantic retrieval for the long-running AI coding product (dev-workflow). Pluggable, CGO-free by default; vector DB when warranted.",
+      "ai_skills": "Embeddings, semantic search, RAG, memory extraction (facts/episodes)",
+      "go_skills": "Narrow interfaces + pluggable backends, cosine similarity, HTTP clients",
+      "notes": "Reserved per product framing: dev-workflow is a long-line one-stop AI coding app, so long-term memory is a core need. Plugs into existing abstractions — ContextPolicy.Sources (auto pre-step retrieval, M4-005 seam) and Ring 2 Tool (agent-driven). No-CGO/single-binary constraint drives backends (in-memory cosine first; pgvector/external vector service as adapters). M6 dev-workflow may use a trivial ContextSource; M8 can be pulled before M6 if the product needs it earlier.",
+      "features": [
+        {
+          "id": "M8-001",
+          "name": "Retriever + MemoryStore Interfaces",
+          "description": "Narrow Retriever (Retrieve(ctx, query) []Document) + MemoryStore (Add/Search/Delete, user/project scoped) interfaces + Document type. Boundary interfaces; backends concrete.",
+          "dependencies": ["M4-005"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M8-002",
+          "name": "Embedder Interface + Remote Default",
+          "description": "Embedder interface + default impl over a remote embeddings API (OpenAI-compatible). No local model → preserves no-CGO/single-binary.",
+          "dependencies": ["M8-001"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M8-003",
+          "name": "Vector Store Backend",
+          "description": "Pluggable vector store. Pure-Go in-memory cosine search first (zero-dep, CGO-free); interface allows pgvector / external vector service adapters later.",
+          "dependencies": ["M8-002"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M8-004",
+          "name": "Memory Integration (ContextSource + Tool)",
+          "description": "Expose retrieval as a ContextSource (automatic pre-step injection) AND as memory_search / memory_add tools (agent-driven). Reuses the M4-005 seam + Ring 2 Tool.",
+          "dependencies": ["M8-003", "M4-005", "M2-003"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M8-005",
+          "name": "Auto Memory Extraction",
+          "description": "Distill facts/episodes from completed pipeline runs / sessions into the memory store, scoped by project. Inspired by tRPC-Agent-Go auto-memory.",
+          "dependencies": ["M8-004", "M5-003"],
           "status": "not-started",
           "evidence": ""
         }
