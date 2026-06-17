@@ -39,6 +39,9 @@ go.work.sum
 !.env.example
 *.pem
 *.key
+# Local MCP server config — contains tokens / internal endpoints; never commit.
+.mcp.json
+mcp.json
 
 # SQLite (checkpoint store runtime data)
 *.db

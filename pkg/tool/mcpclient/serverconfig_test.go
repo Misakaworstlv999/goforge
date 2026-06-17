@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/oauth2"
 )
 
 func TestServerSpec_ToConfig(t *testing.T) {
@@ -87,7 +88,7 @@ func TestHTTPClient_injectsHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := httpClient(map[string]string{"Authorization": "Bearer abc"})
+	c := httpClient(map[string]string{"Authorization": "Bearer abc"}, nil)
 	if c == nil {
 		t.Fatal("expected non-nil client when headers given")
 	}
@@ -98,8 +99,60 @@ func TestHTTPClient_injectsHeaders(t *testing.T) {
 		t.Errorf("header not injected: %q", got)
 	}
 
-	if httpClient(nil) != nil {
-		t.Error("expected nil client when no headers")
+	if httpClient(nil, nil) != nil {
+		t.Error("expected nil client when no headers and no token source")
+	}
+}
+
+func TestHTTPClient_oauthTokenInjected(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("Authorization")
+	}))
+	defer srv.Close()
+
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "tok123", TokenType: "Bearer"})
+	c := httpClient(nil, ts)
+	if c == nil {
+		t.Fatal("expected non-nil client when token source given")
+	}
+	if _, err := c.Get(srv.URL); err != nil {
+		t.Fatal(err)
+	}
+	if got != "Bearer tok123" {
+		t.Errorf("oauth token not injected: %q", got)
+	}
+}
+
+func TestToConfig_oauth(t *testing.T) {
+	spec := ServerSpec{URL: "https://x/mcp", OAuth: &OAuthSpec{ClientID: "id", ClientSecret: "sec", TokenURL: "https://x/token", Scopes: []string{"a"}}}
+	cfg, err := spec.ToConfig("remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TokenSource == nil {
+		t.Error("expected a TokenSource from oauth block")
+	}
+
+	bad := ServerSpec{URL: "https://x/mcp", OAuth: &OAuthSpec{ClientSecret: "sec"}} // no clientId/tokenUrl
+	if _, err := bad.ToConfig("remote"); err == nil {
+		t.Error("expected error for incomplete oauth block")
+	}
+}
+
+func TestNewMCPTool_prefix(t *testing.T) {
+	mt := &mcpsdk.Tool{Name: "read_file", Description: "d"}
+	tl, err := newMCPTool(nil, mt, "filesystem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tl.Name() != "filesystem_read_file" {
+		t.Errorf("prefixed name = %q, want filesystem_read_file", tl.Name())
+	}
+	// No prefix ⇒ bare (sanitized) name.
+	tl2, _ := newMCPTool(nil, mt, "")
+	if tl2.Name() != "read_file" {
+		t.Errorf("unprefixed name = %q, want read_file", tl2.Name())
 	}
 }
 

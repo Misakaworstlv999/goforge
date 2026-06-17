@@ -119,6 +119,14 @@
           "dependencies": ["M2-006", "M3-004"],
           "status": "done",
           "evidence": "pkg/tool/mcpclient/ (SDK isolated here): client.go (Connect, cursor-paginated Tools, Close, three transports stdio/streamable-HTTP/SSE with env + header-injecting http.Client, narrow session iface) + tool.go (adapter: InputSchema→json.RawMessage, Arguments passthrough, TextContent extraction, IsError→error) + serverconfig.go (standard mcpServers schema: ServerSpec/LoadServersConfig/ToConfig, url⇒remote/type, else stdio). Tests: fake-session unit + ToConfig routing + header injection + real-SDK in-memory integration, -race. CLI: -mcp-config / GOFORGE_MCP_CONFIG points at a .mcp.json (Claude Desktop / Cursor format); connect → RegisterSet → Close on exit. dep: modelcontextprotocol/go-sdk v1.6.1 (CGO_ENABLED=0 verified)."
+        },
+        {
+          "id": "M2-008",
+          "name": "MCP Hardening (OAuth + tool-name prefix + progressive disclosure)",
+          "description": "Production hardening of the MCP client: (1) OAuth2 for remote servers; (2) per-server tool-name prefixing + charset sanitization to avoid collisions; (3) progressive disclosure (broker) so many MCP tools don't bloat the system prompt.",
+          "dependencies": ["M2-007"],
+          "status": "done",
+          "evidence": "OAuth2: Config.TokenSource → oauth2.Transport HTTPClient (works for streamable+SSE; SSE has no SDK OAuth hook); .mcp.json 'oauth' block → clientcredentials TokenSource. Prefix: newMCPTool(prefix) → sanitizeToolName(prefix_remoteName) (NFD charset sanitize via golang.org/x/text), remoteName preserved for CallTool; CLI prefixes by server key (fixes MCP read_file vs builtin clash). Broker: pkg/tool/mcpclient/broker.go exposes 3 meta-tools (mcp_list_tools/describe/call) over an index of tool.Tool, enabled via -mcp-expose broker (default direct). Tests: oauth header injection, ToConfig oauth, prefix+remoteName, broker list/describe/call/unknown — all -race. deps: golang.org/x/oauth2 + x/text promoted to direct; CGO_ENABLED=0 verified."
         }
       ]
     },

@@ -58,6 +58,10 @@ type Config struct {
 	// Cursor / .mcp.json format). Its servers' tools are discovered and
 	// registered alongside the builtins. A missing file means no MCP servers.
 	MCPConfigPath string
+	// MCPExpose selects how MCP tools reach the agent: "direct" (each tool
+	// registered individually) or "broker" (3 meta-tools for progressive
+	// disclosure — better when there are many tools).
+	MCPExpose string
 }
 
 // Default values shared by Parse and tests.
@@ -81,10 +85,17 @@ const (
 	envWorkdir       = "GOFORGE_WORKDIR"
 	envAllowCommands = "GOFORGE_ALLOW_COMMANDS"
 	envMCPConfig     = "GOFORGE_MCP_CONFIG"
+	envMCPExpose     = "GOFORGE_MCP_EXPOSE"
 )
 
-// defaultMCPConfigPath is loaded if present when no path is given.
-const defaultMCPConfigPath = ".mcp.json"
+const (
+	// defaultMCPConfigPath is loaded if present when no path is given.
+	defaultMCPConfigPath = ".mcp.json"
+
+	// MCP tool exposure modes.
+	MCPExposeDirect = "direct"
+	MCPExposeBroker = "broker"
+)
 
 // Parse builds a Config from CLI args and an environment lookup function, also
 // consulting a .env file in the current directory if present. getenv is injected
@@ -130,6 +141,7 @@ func ParseWithEnvFile(args []string, getenv func(string) string, envPath string)
 	fs.StringVar(&workdirs, "workdirs", "", "Comma-separated sandbox root directories for file/shell tools (default: current directory)")
 	fs.StringVar(&allowCommands, "allow-commands", "", "Comma-separated shell command allowlist; empty disables exec_command")
 	fs.StringVar(&cfg.MCPConfigPath, "mcp-config", defaultMCPConfigPath, "Path to a standard mcpServers JSON config (.mcp.json); missing file = no MCP servers")
+	fs.StringVar(&cfg.MCPExpose, "mcp-expose", MCPExposeDirect, "How MCP tools reach the agent: direct | broker (progressive disclosure)")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -197,6 +209,14 @@ func ParseWithEnvFile(args []string, getenv func(string) string, envPath string)
 		if v := lookup(envMCPConfig); v != "" {
 			cfg.MCPConfigPath = v
 		}
+	}
+	if !set["mcp-expose"] {
+		if v := lookup(envMCPExpose); v != "" {
+			cfg.MCPExpose = v
+		}
+	}
+	if cfg.MCPExpose != MCPExposeDirect && cfg.MCPExpose != MCPExposeBroker {
+		return Config{}, fmt.Errorf("invalid -mcp-expose %q: want direct or broker", cfg.MCPExpose)
 	}
 	cfg.Workdirs = splitCommaList(workdirs)
 	cfg.AllowCommands = splitCommaList(allowCommands)

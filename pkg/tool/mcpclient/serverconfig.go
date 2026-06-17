@@ -1,9 +1,12 @@
 package mcpclient
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+
+	"golang.org/x/oauth2/clientcredentials"
 )
 
 // ServerSpec is one entry of the standard `mcpServers` config (as used by Claude
@@ -16,6 +19,17 @@ type ServerSpec struct {
 	URL     string            `json:"url,omitempty"`
 	Type    string            `json:"type,omitempty"` // "", "streamable"/"http", "sse"
 	Headers map[string]string `json:"headers,omitempty"`
+	OAuth   *OAuthSpec        `json:"oauth,omitempty"` // remote: OAuth2 client-credentials
+}
+
+// OAuthSpec configures the OAuth2 client-credentials grant for a remote server.
+// Tokens are fetched from TokenURL and auto-refreshed. (Static bearer tokens can
+// instead be set directly via Headers.)
+type OAuthSpec struct {
+	ClientID     string   `json:"clientId"`
+	ClientSecret string   `json:"clientSecret"`
+	TokenURL     string   `json:"tokenUrl"`
+	Scopes       []string `json:"scopes,omitempty"`
 }
 
 // ServersConfig is the top-level standard config file: {"mcpServers": {...}}.
@@ -57,6 +71,18 @@ func (s ServerSpec) ToConfig(name string) (Config, error) {
 			cfg.Kind = SSE
 		default:
 			return Config{}, fmt.Errorf("mcp server %q: unknown type %q (want streamable or sse)", name, s.Type)
+		}
+		if s.OAuth != nil {
+			if s.OAuth.ClientID == "" || s.OAuth.TokenURL == "" {
+				return Config{}, fmt.Errorf("mcp server %q: oauth needs clientId and tokenUrl", name)
+			}
+			cc := &clientcredentials.Config{
+				ClientID:     s.OAuth.ClientID,
+				ClientSecret: s.OAuth.ClientSecret,
+				TokenURL:     s.OAuth.TokenURL,
+				Scopes:       s.OAuth.Scopes,
+			}
+			cfg.TokenSource = cc.TokenSource(context.Background())
 		}
 		return cfg, nil
 	}

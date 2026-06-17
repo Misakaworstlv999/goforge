@@ -33,10 +33,13 @@ var _ tool.Tool = (*mcpTool)(nil)
 
 // newMCPTool converts an SDK tool descriptor into an mcpTool. The MCP input
 // schema (*jsonschema.Schema) is marshaled to raw JSON and used directly as the
-// LLM tool parameters; a nil schema falls back to an empty object. The tool
-// name is sanitized to [a-zA-Z0-9_-]+ for LLM API compatibility; the original
-// name is preserved for CallTool.
-func newMCPTool(s session, mt *mcpsdk.Tool) (tool.Tool, error) {
+// LLM tool parameters; a nil schema falls back to an empty object.
+//
+// The LLM-facing name is prefix + the remote name, sanitized to [a-zA-Z0-9_-]+;
+// a non-empty prefix namespaces tools per server to avoid collisions (e.g. two
+// servers' "read_file", or an MCP "read_file" vs the builtin). The original
+// remote name is preserved for CallTool.
+func newMCPTool(s session, mt *mcpsdk.Tool, prefix string) (tool.Tool, error) {
 	params := emptyObjectSchema
 	if mt.InputSchema != nil {
 		raw, err := json.Marshal(mt.InputSchema)
@@ -45,7 +48,11 @@ func newMCPTool(s session, mt *mcpsdk.Tool) (tool.Tool, error) {
 		}
 		params = raw
 	}
-	safeName := sanitizeToolName(mt.Name)
+	display := mt.Name
+	if prefix != "" {
+		display = prefix + "_" + mt.Name
+	}
+	safeName := sanitizeToolName(display)
 	return &mcpTool{
 		name:       safeName,
 		remoteName: mt.Name,

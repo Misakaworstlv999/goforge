@@ -12,6 +12,7 @@ import (
 	"os/exec"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/oauth2"
 
 	"github.com/Misakaworstlv999/goforge/pkg/tool"
 )
@@ -30,14 +31,16 @@ const (
 
 // Config describes one MCP server connection.
 type Config struct {
-	Name    string // client identity sent to the server
-	Version string
-	Kind    TransportKind
-	Command string            // Stdio: program to run
-	Args    []string          // Stdio: program arguments
-	Env     map[string]string // Stdio: extra environment (merged over os.Environ)
-	URL     string            // StreamableHTTP/SSE: endpoint
-	Headers map[string]string // StreamableHTTP/SSE: extra HTTP headers (e.g. auth)
+	Name        string // client identity sent to the server
+	Version     string
+	Kind        TransportKind
+	Command     string             // Stdio: program to run
+	Args        []string           // Stdio: program arguments
+	Env         map[string]string  // Stdio: extra environment (merged over os.Environ)
+	URL         string             // StreamableHTTP/SSE: endpoint
+	Headers     map[string]string  // StreamableHTTP/SSE: static HTTP headers (e.g. auth)
+	TokenSource oauth2.TokenSource // StreamableHTTP/SSE: OAuth2 bearer tokens (auto-refreshed)
+	ToolPrefix  string             // namespaces exposed tool names (avoids collisions)
 }
 
 // session is the narrow slice of the SDK ClientSession this package needs. It
@@ -51,7 +54,8 @@ type session interface {
 // Client is a connected MCP server, exposed as a tool.ToolSet. Close it to tear
 // down the session (and the subprocess, for Stdio).
 type Client struct {
-	sess session
+	sess   session
+	prefix string // ToolPrefix; namespaces exposed tool names
 }
 
 // compile-time: Client is a ToolSet.
@@ -78,7 +82,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mcp connect: %w", err)
 	}
-	return &Client{sess: cs}, nil
+	return &Client{sess: cs, prefix: cfg.ToolPrefix}, nil
 }
 
 // newClientWith builds a Client over an injected session (for tests).
@@ -102,24 +106,33 @@ func newTransport(cfg Config) (mcpsdk.Transport, error) {
 		if cfg.URL == "" {
 			return nil, fmt.Errorf("mcp streamable-http transport requires a url")
 		}
-		return &mcpsdk.StreamableClientTransport{Endpoint: cfg.URL, HTTPClient: httpClient(cfg.Headers)}, nil
+		return &mcpsdk.StreamableClientTransport{Endpoint: cfg.URL, HTTPClient: httpClient(cfg.Headers, cfg.TokenSource)}, nil
 	case SSE:
 		if cfg.URL == "" {
 			return nil, fmt.Errorf("mcp sse transport requires a url")
 		}
-		return &mcpsdk.SSEClientTransport{Endpoint: cfg.URL, HTTPClient: httpClient(cfg.Headers)}, nil
+		return &mcpsdk.SSEClientTransport{Endpoint: cfg.URL, HTTPClient: httpClient(cfg.Headers, cfg.TokenSource)}, nil
 	default:
 		return nil, fmt.Errorf("unknown mcp transport kind %d", cfg.Kind)
 	}
 }
 
-// httpClient returns an *http.Client that injects the given headers on every
-// request, or nil when there are none (the SDK then uses http.DefaultClient).
-func httpClient(headers map[string]string) *http.Client {
-	if len(headers) == 0 {
+// httpClient builds an *http.Client for remote transports. It layers, from the
+// base outward: static headers, then OAuth2 bearer tokens (auto-refreshed via
+// oauth2.Transport). Returns nil when neither is configured (the SDK then uses
+// http.DefaultClient).
+func httpClient(headers map[string]string, ts oauth2.TokenSource) *http.Client {
+	if len(headers) == 0 && ts == nil {
 		return nil
 	}
-	return &http.Client{Transport: headerRoundTripper{headers: headers, base: http.DefaultTransport}}
+	var base http.RoundTripper = http.DefaultTransport
+	if len(headers) > 0 {
+		base = headerRoundTripper{headers: headers, base: base}
+	}
+	if ts != nil {
+		base = &oauth2.Transport{Source: ts, Base: base}
+	}
+	return &http.Client{Transport: base}
 }
 
 type headerRoundTripper struct {
@@ -147,7 +160,7 @@ func (c *Client) Tools(ctx context.Context) ([]tool.Tool, error) {
 			return nil, fmt.Errorf("mcp list tools: %w", err)
 		}
 		for _, mt := range res.Tools {
-			t, err := newMCPTool(c.sess, mt)
+			t, err := newMCPTool(c.sess, mt, c.prefix)
 			if err != nil {
 				return nil, err
 			}

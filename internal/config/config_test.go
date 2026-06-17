@@ -210,6 +210,26 @@ func TestParse_mcpConfig(t *testing.T) {
 	})
 }
 
+func TestParse_mcpExpose(t *testing.T) {
+	t.Run("default direct", func(t *testing.T) {
+		cfg, err := Parse(nil, noEnv)
+		if err != nil || cfg.MCPExpose != MCPExposeDirect {
+			t.Errorf("MCPExpose = %q err=%v, want direct", cfg.MCPExpose, err)
+		}
+	})
+	t.Run("broker via flag", func(t *testing.T) {
+		cfg, err := Parse([]string{"-mcp-expose", "broker"}, noEnv)
+		if err != nil || cfg.MCPExpose != MCPExposeBroker {
+			t.Errorf("MCPExpose = %q err=%v", cfg.MCPExpose, err)
+		}
+	})
+	t.Run("invalid", func(t *testing.T) {
+		if _, err := Parse([]string{"-mcp-expose", "nonsense"}, noEnv); err == nil {
+			t.Error("expected error for invalid -mcp-expose")
+		}
+	})
+}
+
 func TestParse_invalidFlag(t *testing.T) {
 	if _, err := Parse([]string{"-nope"}, noEnv); err == nil {
 		t.Error("expected error for unknown flag")

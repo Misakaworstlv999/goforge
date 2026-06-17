@@ -122,22 +122,41 @@ func (a *App) registerMCPServers(ctx context.Context, reg *tool.Registry) {
 	}
 	sort.Strings(names)
 
+	var mcpTools []tool.Tool
 	for _, name := range names {
 		cfg, err := sc.MCPServers[name].ToConfig(name)
 		if err != nil {
 			fmt.Fprintf(a.out, "warning: MCP server %q skipped: %v\n", name, err)
 			continue
 		}
+		cfg.ToolPrefix = name // namespace this server's tools (avoid collisions)
 		client, err := mcpclient.New(ctx, cfg)
 		if err != nil {
 			fmt.Fprintf(a.out, "warning: MCP server %q disabled: %v\n", name, err)
 			continue
 		}
-		if err := reg.RegisterSet(ctx, client); err != nil {
+		tools, err := client.Tools(ctx)
+		if err != nil {
 			fmt.Fprintf(a.out, "warning: MCP server %q tools skipped: %v\n", name, err)
 			_ = client.Close()
 			continue
 		}
+		mcpTools = append(mcpTools, tools...)
 		a.closers = append(a.closers, client)
+	}
+	if len(mcpTools) == 0 {
+		return
+	}
+
+	// direct: register every tool; broker: expose 3 meta-tools (progressive
+	// disclosure) instead, keeping the system prompt small.
+	if a.cfg.MCPExpose == config.MCPExposeBroker {
+		if err := reg.RegisterSet(ctx, mcpclient.NewBroker(mcpTools)); err != nil {
+			fmt.Fprintf(a.out, "warning: MCP broker tools skipped: %v\n", err)
+		}
+		return
+	}
+	if err := reg.Register(mcpTools...); err != nil {
+		fmt.Fprintf(a.out, "warning: some MCP tools skipped: %v\n", err)
 	}
 }
