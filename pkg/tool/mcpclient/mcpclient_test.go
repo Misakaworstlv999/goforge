@@ -92,6 +92,56 @@ func TestExecute_textAndError(t *testing.T) {
 	})
 }
 
+func TestSanitizeToolName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"calculator", "calculator"},
+		{"get-issues", "get-issues"},
+		{"KM_文档解析", "KM"},
+		{"hello world", "hello_world"},
+		{"a--b__c", "a--b__c"},
+		{"  spaced  ", "spaced"},
+		{"café", "cafe"},
+		{"工具A", "A"},
+		{"", "tool"},
+		{"___", "___"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := sanitizeToolName(tt.input)
+			if got != tt.want {
+				t.Errorf("sanitizeToolName(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+			if !toolNameRe.MatchString(got) {
+				t.Errorf("sanitizeToolName(%q) = %q, does not match [a-zA-Z0-9_-]+", tt.input, got)
+			}
+		})
+	}
+}
+
+func TestExecute_usesRemoteName(t *testing.T) {
+	var calledWith string
+	fs := &fakeSession{
+		pages: map[string]*mcpsdk.ListToolsResult{"": {Tools: []*mcpsdk.Tool{{Name: "KM_文档解析"}}}},
+		callFn: func(p *mcpsdk.CallToolParams) (*mcpsdk.CallToolResult, error) {
+			calledWith = p.Name
+			return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "ok"}}}, nil
+		},
+	}
+	tools, _ := newClientWith(fs).Tools(context.Background())
+	if tools[0].Name() == "KM_文档解析" {
+		t.Fatal("sanitized name should not contain Chinese characters")
+	}
+	if _, err := tools[0].Execute(context.Background(), json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if calledWith != "KM_文档解析" {
+		t.Errorf("CallTool received %q, want original remote name", calledWith)
+	}
+}
+
 func TestClose(t *testing.T) {
 	fs := &fakeSession{}
 	if err := newClientWith(fs).Close(); err != nil || !fs.closed {

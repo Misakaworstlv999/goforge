@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
+	"unicode"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/Misakaworstlv999/goforge/pkg/llm"
 	"github.com/Misakaworstlv999/goforge/pkg/tool"
@@ -18,10 +21,11 @@ var emptyObjectSchema = json.RawMessage(`{"type":"object"}`)
 // mcpTool adapts one remote MCP tool to GoForge's tool.Tool. Execution is
 // forwarded to the MCP server via the shared session.
 type mcpTool struct {
-	name   string
-	desc   string
-	schema llm.ToolSchema
-	sess   session
+	name       string // sanitized name sent to the LLM (must match [a-zA-Z0-9_-]+)
+	remoteName string // original name used in CallTool to the MCP server
+	desc       string
+	schema     llm.ToolSchema
+	sess       session
 }
 
 // compile-time: mcpTool is a Tool.
@@ -29,7 +33,9 @@ var _ tool.Tool = (*mcpTool)(nil)
 
 // newMCPTool converts an SDK tool descriptor into an mcpTool. The MCP input
 // schema (*jsonschema.Schema) is marshaled to raw JSON and used directly as the
-// LLM tool parameters; a nil schema falls back to an empty object.
+// LLM tool parameters; a nil schema falls back to an empty object. The tool
+// name is sanitized to [a-zA-Z0-9_-]+ for LLM API compatibility; the original
+// name is preserved for CallTool.
 func newMCPTool(s session, mt *mcpsdk.Tool) (tool.Tool, error) {
 	params := emptyObjectSchema
 	if mt.InputSchema != nil {
@@ -39,12 +45,14 @@ func newMCPTool(s session, mt *mcpsdk.Tool) (tool.Tool, error) {
 		}
 		params = raw
 	}
+	safeName := sanitizeToolName(mt.Name)
 	return &mcpTool{
-		name: mt.Name,
-		desc: mt.Description,
-		sess: s,
+		name:       safeName,
+		remoteName: mt.Name,
+		desc:       mt.Description,
+		sess:       s,
 		schema: llm.ToolSchema{
-			Name:        mt.Name,
+			Name:        safeName,
 			Description: mt.Description,
 			Parameters:  params,
 		},
@@ -55,15 +63,16 @@ func (t *mcpTool) Name() string           { return t.name }
 func (t *mcpTool) Description() string    { return t.desc }
 func (t *mcpTool) Schema() llm.ToolSchema { return t.schema }
 
-// Execute forwards the call to the MCP server. The LLM-provided JSON args are
-// passed through unchanged. A tool-level failure (IsError) is returned as an
-// error so the registry encodes it into ToolResult.IsError for the agent.
+// Execute forwards the call to the MCP server using the original remote name.
+// The LLM-provided JSON args are passed through unchanged. A tool-level failure
+// (IsError) is returned as an error so the registry encodes it into
+// ToolResult.IsError for the agent.
 func (t *mcpTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	args := any(raw)
 	if len(raw) == 0 {
 		args = nil
 	}
-	res, err := t.sess.CallTool(ctx, &mcpsdk.CallToolParams{Name: t.name, Arguments: args})
+	res, err := t.sess.CallTool(ctx, &mcpsdk.CallToolParams{Name: t.remoteName, Arguments: args})
 	if err != nil {
 		return "", fmt.Errorf("mcp call %q: %w", t.name, err)
 	}
@@ -73,6 +82,59 @@ func (t *mcpTool) Execute(ctx context.Context, raw json.RawMessage) (string, err
 		return "", fmt.Errorf("mcp tool %q failed: %s", t.name, text)
 	}
 	return text, nil
+}
+
+// toolNameRe is the pattern LLM providers (OpenAI, Anthropic/Bedrock) require.
+var toolNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// sanitizeToolName makes a tool name safe for LLM APIs. If it already matches
+// [a-zA-Z0-9_-]+ it is returned unchanged. Otherwise non-ASCII letters are
+// transliterated to their closest ASCII decomposition (e.g. Chinese → pinyin-ish
+// NFD codepoints are stripped), spaces/punctuation become underscores, and
+// consecutive or trailing underscores are collapsed.
+func sanitizeToolName(name string) string {
+	if toolNameRe.MatchString(name) {
+		return name
+	}
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range norm.NFD.String(name) {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+		case r == '_' || r == '-':
+			b.WriteRune(r)
+		case unicode.Is(unicode.Mn, r):
+			// combining marks from NFD decomposition — drop silently
+		default:
+			b.WriteByte('_')
+		}
+	}
+	result := b.String()
+	result = collapseUnderscores(result)
+	result = strings.Trim(result, "_")
+	if result == "" {
+		result = "tool"
+	}
+	return result
+}
+
+func collapseUnderscores(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	prev := false
+	for _, r := range s {
+		if r == '_' {
+			if !prev {
+				b.WriteByte('_')
+			}
+			prev = true
+		} else {
+			b.WriteRune(r)
+			prev = false
+		}
+	}
+	return b.String()
 }
 
 // extractText concatenates the textual content items of a tool result.

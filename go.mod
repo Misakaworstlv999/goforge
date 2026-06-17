@@ -7,7 +7,7 @@ require (
 	github.com/invopop/jsonschema v0.14.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/openai/openai-go v1.12.0
-	golang.org/x/sync v0.16.0
+	golang.org/x/sync v0.21.0
 )
 
 require (
@@ -26,4 +26,5 @@ require (
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
+	golang.org/x/text v0.38.0 // indirect
 )
