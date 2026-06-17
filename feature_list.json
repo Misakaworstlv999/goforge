@@ -127,6 +127,14 @@
           "dependencies": ["M2-007"],
           "status": "done",
           "evidence": "OAuth2: Config.TokenSource → oauth2.Transport HTTPClient (works for streamable+SSE; SSE has no SDK OAuth hook); .mcp.json 'oauth' block → clientcredentials TokenSource. Prefix: newMCPTool(prefix) → sanitizeToolName(prefix_remoteName) (NFD charset sanitize via golang.org/x/text), remoteName preserved for CallTool; CLI prefixes by server key (fixes MCP read_file vs builtin clash). Broker: pkg/tool/mcpclient/broker.go exposes 3 meta-tools (mcp_list_tools/describe/call) over an index of tool.Tool, enabled via -mcp-expose broker (default direct). Tests: oauth header injection, ToConfig oauth, prefix+remoteName, broker list/describe/call/unknown — all -race. deps: golang.org/x/oauth2 + x/text promoted to direct; CGO_ENABLED=0 verified."
+        },
+        {
+          "id": "M2-009",
+          "name": "Interactive OAuth (authorization code)",
+          "description": "Interactive OAuth 2.1 authorization-code flow (browser login + consent) for remote MCP servers, beyond M2-008's unattended client-credentials. SDK handles discovery + dynamic client registration + PKCE + token exchange/refresh; we supply the browser+callback leg.",
+          "dependencies": ["M2-008"],
+          "status": "done",
+          "evidence": "pkg/tool/mcpclient/oauth.go: browserAuthFetcher (injectable openFunc opens OS browser; one-shot localhost callback server captures ?code=&state=) + newAuthCodeHandler (auth.NewAuthorizationCodeHandler with DCR by default, or preregistered client) → Config.OAuthHandler set on StreamableClientTransport. serverconfig.go OAuthSpec.Flow=authorization_code|client_credentials + RedirectPort (default 8765); SSE+authcode rejected. Token in-session only (SDK has no token store; cross-run persistence deferred). Tests: fetcher capture/error/timeout via fake browser, ToConfig flow routing, SSE rejection — all -race. CGO_ENABLED=0 verified."
         }
       ]
     },

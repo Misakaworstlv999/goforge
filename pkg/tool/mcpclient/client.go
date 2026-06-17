@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/oauth2"
 
@@ -31,16 +32,17 @@ const (
 
 // Config describes one MCP server connection.
 type Config struct {
-	Name        string // client identity sent to the server
-	Version     string
-	Kind        TransportKind
-	Command     string             // Stdio: program to run
-	Args        []string           // Stdio: program arguments
-	Env         map[string]string  // Stdio: extra environment (merged over os.Environ)
-	URL         string             // StreamableHTTP/SSE: endpoint
-	Headers     map[string]string  // StreamableHTTP/SSE: static HTTP headers (e.g. auth)
-	TokenSource oauth2.TokenSource // StreamableHTTP/SSE: OAuth2 bearer tokens (auto-refreshed)
-	ToolPrefix  string             // namespaces exposed tool names (avoids collisions)
+	Name         string // client identity sent to the server
+	Version      string
+	Kind         TransportKind
+	Command      string             // Stdio: program to run
+	Args         []string           // Stdio: program arguments
+	Env          map[string]string  // Stdio: extra environment (merged over os.Environ)
+	URL          string             // StreamableHTTP/SSE: endpoint
+	Headers      map[string]string  // StreamableHTTP/SSE: static HTTP headers (e.g. auth)
+	TokenSource  oauth2.TokenSource // StreamableHTTP/SSE: OAuth2 bearer tokens (auto-refreshed)
+	OAuthHandler auth.OAuthHandler  // StreamableHTTP only: interactive authorization-code flow
+	ToolPrefix   string             // namespaces exposed tool names (avoids collisions)
 }
 
 // session is the narrow slice of the SDK ClientSession this package needs. It
@@ -106,10 +108,17 @@ func newTransport(cfg Config) (mcpsdk.Transport, error) {
 		if cfg.URL == "" {
 			return nil, fmt.Errorf("mcp streamable-http transport requires a url")
 		}
-		return &mcpsdk.StreamableClientTransport{Endpoint: cfg.URL, HTTPClient: httpClient(cfg.Headers, cfg.TokenSource)}, nil
+		return &mcpsdk.StreamableClientTransport{
+			Endpoint:     cfg.URL,
+			HTTPClient:   httpClient(cfg.Headers, cfg.TokenSource),
+			OAuthHandler: cfg.OAuthHandler,
+		}, nil
 	case SSE:
 		if cfg.URL == "" {
 			return nil, fmt.Errorf("mcp sse transport requires a url")
+		}
+		if cfg.OAuthHandler != nil {
+			return nil, fmt.Errorf("mcp sse transport does not support interactive OAuth; use type \"streamable\"")
 		}
 		return &mcpsdk.SSEClientTransport{Endpoint: cfg.URL, HTTPClient: httpClient(cfg.Headers, cfg.TokenSource)}, nil
 	default:

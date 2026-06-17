@@ -140,6 +140,40 @@ func TestToConfig_oauth(t *testing.T) {
 	}
 }
 
+func TestToConfig_authorizationCode(t *testing.T) {
+	t.Run("builds OAuthHandler (DCR)", func(t *testing.T) {
+		spec := ServerSpec{URL: "https://x/mcp", Type: "streamable", OAuth: &OAuthSpec{Flow: "authorization_code"}}
+		cfg, err := spec.ToConfig("remote")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.OAuthHandler == nil {
+			t.Error("expected an OAuthHandler for authorization_code")
+		}
+		if cfg.TokenSource != nil {
+			t.Error("authorization_code should not set the client-credentials TokenSource")
+		}
+	})
+
+	t.Run("unknown flow errors", func(t *testing.T) {
+		spec := ServerSpec{URL: "https://x/mcp", OAuth: &OAuthSpec{Flow: "device_code"}}
+		if _, err := spec.ToConfig("remote"); err == nil {
+			t.Error("expected error for unknown oauth flow")
+		}
+	})
+
+	t.Run("authorization_code + SSE rejected at transport", func(t *testing.T) {
+		spec := ServerSpec{URL: "https://x/mcp", Type: "sse", OAuth: &OAuthSpec{Flow: "authorization_code"}}
+		cfg, err := spec.ToConfig("remote")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := newTransport(cfg); err == nil {
+			t.Error("expected error: interactive OAuth over SSE")
+		}
+	})
+}
+
 func TestNewMCPTool_prefix(t *testing.T) {
 	mt := &mcpsdk.Tool{Name: "read_file", Description: "d"}
 	tl, err := newMCPTool(nil, mt, "filesystem")

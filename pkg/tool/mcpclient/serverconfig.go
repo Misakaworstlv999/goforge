@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
 	"golang.org/x/oauth2/clientcredentials"
 )
 
@@ -22,15 +23,23 @@ type ServerSpec struct {
 	OAuth   *OAuthSpec        `json:"oauth,omitempty"` // remote: OAuth2 client-credentials
 }
 
-// OAuthSpec configures the OAuth2 client-credentials grant for a remote server.
-// Tokens are fetched from TokenURL and auto-refreshed. (Static bearer tokens can
-// instead be set directly via Headers.)
+// OAuthSpec configures OAuth2 for a remote server. Flow selects the grant:
+//   - "client_credentials" (default): unattended; needs ClientID/ClientSecret/TokenURL.
+//   - "authorization_code": interactive browser login (OAuth 2.1 + PKCE). The auth
+//     server is discovered from the MCP endpoint; a client is registered dynamically
+//     unless ClientID is given. Streamable-HTTP only.
+//
+// (A static bearer token can instead be set directly via Headers.)
 type OAuthSpec struct {
-	ClientID     string   `json:"clientId"`
-	ClientSecret string   `json:"clientSecret"`
-	TokenURL     string   `json:"tokenUrl"`
-	Scopes       []string `json:"scopes,omitempty"`
+	Flow         string   `json:"flow,omitempty"` // "", "client_credentials", "authorization_code"
+	ClientID     string   `json:"clientId,omitempty"`
+	ClientSecret string   `json:"clientSecret,omitempty"`
+	TokenURL     string   `json:"tokenUrl,omitempty"`     // client_credentials
+	Scopes       []string `json:"scopes,omitempty"`       // client_credentials
+	RedirectPort int      `json:"redirectPort,omitempty"` // authorization_code (default 8765)
 }
+
+const defaultRedirectPort = 8765
 
 // ServersConfig is the top-level standard config file: {"mcpServers": {...}}.
 type ServersConfig struct {
@@ -73,16 +82,9 @@ func (s ServerSpec) ToConfig(name string) (Config, error) {
 			return Config{}, fmt.Errorf("mcp server %q: unknown type %q (want streamable or sse)", name, s.Type)
 		}
 		if s.OAuth != nil {
-			if s.OAuth.ClientID == "" || s.OAuth.TokenURL == "" {
-				return Config{}, fmt.Errorf("mcp server %q: oauth needs clientId and tokenUrl", name)
+			if err := s.OAuth.apply(name, &cfg); err != nil {
+				return Config{}, err
 			}
-			cc := &clientcredentials.Config{
-				ClientID:     s.OAuth.ClientID,
-				ClientSecret: s.OAuth.ClientSecret,
-				TokenURL:     s.OAuth.TokenURL,
-				Scopes:       s.OAuth.Scopes,
-			}
-			cfg.TokenSource = cc.TokenSource(context.Background())
 		}
 		return cfg, nil
 	}
@@ -95,4 +97,45 @@ func (s ServerSpec) ToConfig(name string) (Config, error) {
 	cfg.Args = s.Args
 	cfg.Env = s.Env
 	return cfg, nil
+}
+
+// apply configures cfg's OAuth fields according to the selected flow.
+func (o *OAuthSpec) apply(name string, cfg *Config) error {
+	switch o.Flow {
+	case "", "client_credentials":
+		if o.ClientID == "" || o.TokenURL == "" {
+			return fmt.Errorf("mcp server %q: client_credentials oauth needs clientId and tokenUrl", name)
+		}
+		cc := &clientcredentials.Config{
+			ClientID:     o.ClientID,
+			ClientSecret: o.ClientSecret,
+			TokenURL:     o.TokenURL,
+			Scopes:       o.Scopes,
+		}
+		cfg.TokenSource = cc.TokenSource(context.Background())
+		return nil
+
+	case "authorization_code":
+		port := o.RedirectPort
+		if port == 0 {
+			port = defaultRedirectPort
+		}
+		redirectURL := fmt.Sprintf("http://localhost:%d/callback", port)
+		var client *oauthex.ClientCredentials
+		if o.ClientID != "" {
+			client = &oauthex.ClientCredentials{ClientID: o.ClientID}
+			if o.ClientSecret != "" {
+				client.ClientSecretAuth = &oauthex.ClientSecretAuth{ClientSecret: o.ClientSecret}
+			}
+		}
+		h, err := newAuthCodeHandler(redirectURL, client, defaultOpen)
+		if err != nil {
+			return fmt.Errorf("mcp server %q: authorization_code oauth: %w", name, err)
+		}
+		cfg.OAuthHandler = h
+		return nil
+
+	default:
+		return fmt.Errorf("mcp server %q: unknown oauth flow %q (want client_credentials or authorization_code)", name, o.Flow)
+	}
 }
