@@ -70,7 +70,7 @@
           "description": "Define Tool interface: Name(), Description(), Schema(), Execute(). Define ToolSet interface for dynamic tool collections.",
           "dependencies": ["M1-003"],
           "status": "done",
-          "evidence": "pkg/tool/tool.go (62 lines) + tool_test.go (7 tests). Single Tool interface; ToolSet deferred to M6 MCP"
+          "evidence": "pkg/tool/tool.go (62 lines) + tool_test.go (7 tests). Single Tool interface shipped; ToolSet (dynamic collections) split out to M2-006, with the MCP-client ToolSet in M2-007."
         },
         {
           "id": "M2-002",
@@ -103,6 +103,22 @@
           "dependencies": ["M2-004", "M1-004"],
           "status": "done",
           "evidence": "pkg/tool/executor.go + cmd/goforge/main.go -tools mode; fix openai ToolMessage(content, toolCallID) arg order"
+        },
+        {
+          "id": "M2-006",
+          "name": "ToolSet Interface",
+          "description": "Define the ToolSet interface for dynamic, runtime-discovered tool collections (deferred from M2-001). ToolSet exposes Tools(ctx) []Tool; the Registry consumes a ToolSet to register its tools, so dynamic and static tools share one execution path. Foundational Ring 2 capability — scheduled NEXT, before M5.",
+          "dependencies": ["M2-003"],
+          "status": "not-started",
+          "evidence": ""
+        },
+        {
+          "id": "M2-007",
+          "name": "MCP Client (ToolSet impl)",
+          "description": "MCP CLIENT: consume external MCP servers and adapt their tools into our Tool interface (an implementation of the M2-006 ToolSet — exactly how Eino/tRPC/ADK do it). Dynamic discovery via ListTools, execution via CallTool; transports stdio + streamable HTTP. SDK: official modelcontextprotocol/go-sdk (pure Go, satisfies no-CGO/single-binary; ADK uses it). This is FOUNDATIONAL — it lets GoForge agents reuse the whole MCP tool ecosystem (filesystem, git, etc.) — and is wired BEFORE M5. (MCP server side is M7-005, deprioritized.)",
+          "dependencies": ["M2-006", "M3-004"],
+          "status": "not-started",
+          "evidence": ""
         }
       ]
     },
@@ -352,7 +368,7 @@
         {
           "id": "M7-005",
           "name": "MCP Server",
-          "description": "Expose GoForge itself as an MCP server: tools for triggering pipelines, querying status. Enables integration with Cursor/Claude.",
+          "description": "MCP SERVER side: expose GoForge itself as an MCP server (tools for triggering pipelines, querying status) for Cursor/Claude. DEPRIORITIZED / optional — none of Eino/tRPC/ADK ship a native MCP server (they're MCP clients only); product-facing, low foundational value. The high-value MCP client is M2-007. Build only if a concrete integration need arises.",
           "dependencies": ["M7-001"],
           "status": "not-started",
           "evidence": ""
