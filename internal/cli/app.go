@@ -63,21 +63,21 @@ func (a *App) turnForMode(ctx context.Context) (turn, string) {
 }
 
 // buildRegistry assembles the toolset: calculator + clock always, file tools
-// (read/write/list) sandboxed to the workdir, and exec_command only when a
-// command allowlist is configured (arbitrary exec is opt-in). If the sandbox
-// cannot be created the file/shell tools are skipped with a warning.
+// (read/write/list) sandboxed to the configured workdirs, and exec_command only
+// when a command allowlist is configured (arbitrary exec is opt-in). If the
+// sandbox cannot be created the file/shell tools are skipped with a warning.
 func (a *App) buildRegistry() *tool.Registry {
 	reg := tool.NewRegistry()
 	_ = reg.Register(builtin.NewCalculator(), builtin.NewClock())
 
-	workdir := a.cfg.Workdir
-	if workdir == "" {
+	roots := a.cfg.Workdirs
+	if len(roots) == 0 {
 		if wd, err := os.Getwd(); err == nil {
-			workdir = wd
+			roots = []string{wd}
 		}
 	}
 
-	sb, err := builtin.NewSandbox([]string{workdir},
+	sb, err := builtin.NewSandbox(roots,
 		builtin.WithAllowedCommands(a.cfg.AllowCommands...),
 		builtin.WithCommandTimeout(a.cfg.ToolTimeout),
 	)

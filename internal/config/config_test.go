@@ -136,28 +136,37 @@ func TestParse_overrides(t *testing.T) {
 
 func TestParse_sandboxFields(t *testing.T) {
 	t.Run("flags", func(t *testing.T) {
-		cfg, err := Parse([]string{"-workdir", "/tmp/work", "-allow-commands", "echo, ls , , go"}, noEnv)
+		cfg, err := Parse([]string{"-workdirs", "/tmp/work,/tmp/docs", "-allow-commands", "echo, ls , , go"}, noEnv)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.Workdir != "/tmp/work" {
-			t.Errorf("Workdir = %q", cfg.Workdir)
+		wantDirs := []string{"/tmp/work", "/tmp/docs"}
+		if len(cfg.Workdirs) != len(wantDirs) {
+			t.Fatalf("Workdirs = %v, want %v", cfg.Workdirs, wantDirs)
 		}
-		want := []string{"echo", "ls", "go"}
-		if len(cfg.AllowCommands) != len(want) {
-			t.Fatalf("AllowCommands = %v, want %v", cfg.AllowCommands, want)
+		for i, w := range wantDirs {
+			if cfg.Workdirs[i] != w {
+				t.Errorf("Workdirs[%d] = %q, want %q", i, cfg.Workdirs[i], w)
+			}
 		}
-		for i, w := range want {
+		wantCmds := []string{"echo", "ls", "go"}
+		if len(cfg.AllowCommands) != len(wantCmds) {
+			t.Fatalf("AllowCommands = %v, want %v", cfg.AllowCommands, wantCmds)
+		}
+		for i, w := range wantCmds {
 			if cfg.AllowCommands[i] != w {
 				t.Errorf("AllowCommands[%d] = %q, want %q (trim + skip empties)", i, cfg.AllowCommands[i], w)
 			}
 		}
 	})
 
-	t.Run("default empty allowlist is nil", func(t *testing.T) {
+	t.Run("default empty lists are nil", func(t *testing.T) {
 		cfg, err := Parse(nil, noEnv)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if cfg.Workdirs != nil {
+			t.Errorf("Workdirs = %v, want nil", cfg.Workdirs)
 		}
 		if cfg.AllowCommands != nil {
 			t.Errorf("AllowCommands = %v, want nil", cfg.AllowCommands)
@@ -165,13 +174,13 @@ func TestParse_sandboxFields(t *testing.T) {
 	})
 
 	t.Run("from env", func(t *testing.T) {
-		env := writeEnvFile(t, "GOFORGE_WORKDIR=/srv/app\nGOFORGE_ALLOW_COMMANDS=cat,grep\n")
+		env := writeEnvFile(t, "GOFORGE_WORKDIR=/srv/app,/srv/data\nGOFORGE_ALLOW_COMMANDS=cat,grep\n")
 		cfg, err := ParseWithEnvFile(nil, noEnv, env)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.Workdir != "/srv/app" {
-			t.Errorf("Workdir = %q", cfg.Workdir)
+		if len(cfg.Workdirs) != 2 || cfg.Workdirs[0] != "/srv/app" || cfg.Workdirs[1] != "/srv/data" {
+			t.Errorf("Workdirs = %v", cfg.Workdirs)
 		}
 		if len(cfg.AllowCommands) != 2 || cfg.AllowCommands[0] != "cat" || cfg.AllowCommands[1] != "grep" {
 			t.Errorf("AllowCommands = %v", cfg.AllowCommands)

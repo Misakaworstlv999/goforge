@@ -48,9 +48,10 @@ type Config struct {
 	Mode        Mode
 	MaxSteps    int
 	ToolTimeout time.Duration
-	// Workdir is the sandbox root for file/shell tools. Empty means the current
-	// working directory, resolved by the composition layer.
-	Workdir string
+	// Workdirs are the sandbox root directories for file/shell tools (comma-
+	// separated in env/flags). Empty means only the current working directory,
+	// resolved by the composition layer.
+	Workdirs []string
 	// AllowCommands is the shell command allowlist. Empty disables exec_command.
 	AllowCommands []string
 }
@@ -109,6 +110,7 @@ func ParseWithEnvFile(args []string, getenv func(string) string, envPath string)
 	var cfg Config
 	var mode string
 	var allowCommands string
+	var workdirs string
 	fs.StringVar(&cfg.Provider, "provider", "openai", "LLM provider: openai or anthropic")
 	fs.StringVar(&cfg.Model, "model", "", "Model name (e.g., gpt-4o, claude-sonnet-4-20250514)")
 	fs.StringVar(&cfg.BaseURL, "base-url", "", "Custom API base URL")
@@ -117,7 +119,7 @@ func ParseWithEnvFile(args []string, getenv func(string) string, envPath string)
 	fs.StringVar(&mode, "mode", string(ModeAgent), "Interactive mode: chat | tools | agent")
 	fs.IntVar(&cfg.MaxSteps, "max-steps", defaultMaxSteps, "Max ReAct steps (agent mode only)")
 	fs.DurationVar(&cfg.ToolTimeout, "tool-timeout", defaultToolTimeout, "Per-tool execution timeout (agent mode only)")
-	fs.StringVar(&cfg.Workdir, "workdir", "", "Sandbox root directory for file/shell tools (default: current directory)")
+	fs.StringVar(&workdirs, "workdirs", "", "Comma-separated sandbox root directories for file/shell tools (default: current directory)")
 	fs.StringVar(&allowCommands, "allow-commands", "", "Comma-separated shell command allowlist; empty disables exec_command")
 
 	if err := fs.Parse(args); err != nil {
@@ -172,9 +174,9 @@ func ParseWithEnvFile(args []string, getenv func(string) string, envPath string)
 			cfg.ToolTimeout = d
 		}
 	}
-	if !set["workdir"] {
+	if !set["workdirs"] {
 		if v := lookup(envWorkdir); v != "" {
-			cfg.Workdir = v
+			workdirs = v
 		}
 	}
 	if !set["allow-commands"] {
@@ -182,6 +184,7 @@ func ParseWithEnvFile(args []string, getenv func(string) string, envPath string)
 			allowCommands = v
 		}
 	}
+	cfg.Workdirs = splitCommaList(workdirs)
 	cfg.AllowCommands = splitCommaList(allowCommands)
 
 	cfg.Mode = Mode(mode)
