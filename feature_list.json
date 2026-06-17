@@ -214,7 +214,7 @@
         {
           "id": "M5-001",
           "name": "Stage Interface",
-          "description": "Define Stage[In, Out] with Run() and Verify() (verification gate). Define Gate types: Auto, LLMReview, HumanApproval.",
+          "description": "Define Stage[In, Out] with Run() and Verify() (verification gate). Define Gate types: Auto, LLMReview, HumanApproval. Stage[In,Out] is the EXPLICIT inter-agent handoff channel: one stage's typed output becomes the next stage's input (the per-agent ContextPolicy is vertical/independent; this is the horizontal passing between agents).",
           "dependencies": ["M3-004"],
           "status": "not-started",
           "evidence": ""
@@ -222,7 +222,7 @@
         {
           "id": "M5-002",
           "name": "Pipeline FSM",
-          "description": "Finite state machine: stage registration, conditional routing (next/retry/fail), maxRetries per stage. ~300 lines.",
+          "description": "Finite state machine: stage registration, conditional routing (next/retry/fail), maxRetries per stage. ~300 lines. PipelineState carries a named-key SHARED CONTEXT region (a blackboard, e.g. map[string]any or typed) — this is the inter-agent memory-SHARING mechanism (cf. ADK session.State / StateDelta, Eino AddSessionValue/GetSessionValue session keys). A stage's agent READS shared state via a ContextSource (the M4-005 seam) bound to PipelineState, and WRITES results back via the Stage output or a memory tool (M8). Deliberately keeps the Agent interface unchanged — sharing is composed from ContextSource (read) + Stage output / tool (write), not a new Agent capability.",
           "dependencies": ["M5-001"],
           "status": "not-started",
           "evidence": ""
