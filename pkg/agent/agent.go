@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"iter"
 	"time"
 
@@ -33,6 +34,7 @@ type SimpleAgent struct {
 	model       string
 	maxSteps    int
 	toolTimeout time.Duration
+	policy      ContextPolicy
 }
 
 // Option configures a SimpleAgent.
@@ -62,6 +64,13 @@ func WithToolTimeout(d time.Duration) Option {
 	return func(a *SimpleAgent) { a.toolTimeout = d }
 }
 
+// WithContextPolicy enables context engineering: source injection before the
+// task and budget-triggered compaction during the loop. The zero policy (the
+// default) disables both, preserving baseline behavior.
+func WithContextPolicy(p ContextPolicy) Option {
+	return func(a *SimpleAgent) { a.policy = p }
+}
+
 // New constructs a SimpleAgent over the given LLM client and tool registry.
 func New(client llm.LLM, registry *tool.Registry, opts ...Option) *SimpleAgent {
 	a := &SimpleAgent{
@@ -84,13 +93,41 @@ var _ Agent = (*SimpleAgent)(nil)
 // the consumer stops early (breaks the range), the loop returns promptly.
 func (a *SimpleAgent) Run(ctx context.Context, task string) iter.Seq2[Event, error] {
 	return func(yield func(Event, error) bool) {
+		counter := a.policy.Counter
+		if counter == nil {
+			counter = NewEstimator()
+		}
+		compact := a.policy.Compact
+		if compact == nil {
+			retain := a.policy.RetainRecent
+			if retain <= 0 {
+				retain = defaultRetainRecent
+			}
+			compact = func(ctx context.Context, c llm.LLM, m []llm.Message, b int) ([]llm.Message, error) {
+				return compactMessages(ctx, c, m, b, retain)
+			}
+		}
+
 		messages := make([]llm.Message, 0, 4)
 		if a.system != "" {
 			messages = append(messages, llm.SystemMessage(a.system))
 		}
+		// Inject context sources ahead of the task (the long-term-memory seam).
+		// Strict: a failing source aborts the run — silently dropping retrieved
+		// context would let the agent act confidently on missing information.
+		for _, src := range a.policy.Sources {
+			msgs, err := src(ctx, task)
+			if err != nil {
+				err = fmt.Errorf("loading context source: %w", err)
+				yield(ErrorEvent(err, 0), err)
+				return
+			}
+			messages = append(messages, msgs...)
+		}
 		messages = append(messages, llm.UserMessage(task))
 
 		chatOpts := a.chatOpts()
+		lastUsage := 0 // provider-reported token count from the latest Chat
 
 		for step := 0; step < a.maxSteps; step++ {
 			resp, err := a.llm.Chat(ctx, messages, chatOpts...)
@@ -98,6 +135,7 @@ func (a *SimpleAgent) Run(ctx context.Context, task string) iter.Seq2[Event, err
 				yield(ErrorEvent(err, step), err)
 				return
 			}
+			lastUsage = resp.Usage.TotalTokens
 			messages = append(messages, resp.Message)
 
 			// Surface any reasoning text the model produced this step.
@@ -129,6 +167,26 @@ func (a *SimpleAgent) Run(ctx context.Context, task string) iter.Seq2[Event, err
 					return
 				}
 				messages = append(messages, llm.ToolMessage(r.CallID, r.Content))
+			}
+
+			// Budget check: prefer the provider's real token count, fall back to
+			// the estimator. Compact when over budget (or message-count limit).
+			if a.policy.MaxTokens > 0 {
+				used := lastUsage
+				if used == 0 {
+					used = counter.Count(messages)
+				}
+				over := used > a.policy.MaxTokens ||
+					(a.policy.MaxMessages > 0 && len(messages) > a.policy.MaxMessages)
+				if over {
+					compacted, err := compact(ctx, a.llm, messages, a.policy.MaxTokens)
+					if err != nil {
+						yield(ErrorEvent(err, step), err)
+						return
+					}
+					messages = compacted
+					lastUsage = 0 // real count is stale after compaction; re-derive next turn
+				}
 			}
 		}
 

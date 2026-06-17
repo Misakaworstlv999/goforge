@@ -184,6 +184,110 @@ func TestSimpleAgent_maxStepsExceeded(t *testing.T) {
 	}
 }
 
+func TestSimpleAgent_contextSourceInjected(t *testing.T) {
+	mock := &mockLLM{responses: []llm.Response{
+		{Message: llm.AssistantMessage("ok"), StopReason: llm.StopReasonEnd},
+	}}
+	src := StaticSource(llm.UserMessage("RETRIEVED CONTEXT"))
+	a := New(mock, tool.NewRegistry(),
+		WithSystemPrompt("sys"),
+		WithContextPolicy(ContextPolicy{Sources: []ContextSource{src}}),
+	)
+
+	_, err := collect(t, a.Run(context.Background(), "do it"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Order must be: system, injected source, task.
+	if len(mock.lastMsgs) < 3 {
+		t.Fatalf("expected >=3 messages, got %+v", mock.lastMsgs)
+	}
+	if mock.lastMsgs[0].Role != llm.RoleSystem ||
+		mock.lastMsgs[1].Content != "RETRIEVED CONTEXT" ||
+		mock.lastMsgs[2].Content != "do it" {
+		t.Errorf("unexpected message order: %+v", mock.lastMsgs)
+	}
+}
+
+func TestSimpleAgent_contextSourceErrorAborts(t *testing.T) {
+	mock := &mockLLM{}
+	failing := func(context.Context, string) ([]llm.Message, error) {
+		return nil, errors.New("retrieval down")
+	}
+	a := New(mock, tool.NewRegistry(),
+		WithContextPolicy(ContextPolicy{Sources: []ContextSource{failing}}),
+	)
+
+	events, err := collect(t, a.Run(context.Background(), "task"))
+	if err == nil {
+		t.Fatal("expected error from failing source")
+	}
+	if len(events) != 1 || events[0].Type != EventError {
+		t.Fatalf("expected single error event, got %v", types(events))
+	}
+	if mock.calls != 0 {
+		t.Errorf("LLM should not be called when a source fails, got %d calls", mock.calls)
+	}
+}
+
+func TestSimpleAgent_compactionInLoop(t *testing.T) {
+	// Each step requests a tool (distinct call IDs) so the history grows across
+	// rounds; a tiny MaxTokens forces compaction mid-loop. The run must complete
+	// and the mock must never receive an orphaned tool_call/result.
+	round := func(id string) llm.Response {
+		return llm.Response{
+			Message: llm.Message{
+				Role:      llm.RoleAssistant,
+				Content:   "reasoning for step " + id,
+				ToolCalls: []llm.ToolCall{{ID: id, Name: "calculator", Args: `{"a":1,"b":1,"op":"add"}`}},
+			},
+			StopReason: llm.StopReasonToolCall,
+		}
+	}
+	final := llm.Response{Message: llm.AssistantMessage("final"), StopReason: llm.StopReasonEnd}
+	mock := &validatingMockLLM{inner: mockLLM{responses: []llm.Response{
+		round("c0"), round("c1"), round("c2"), round("c3"), final,
+	}}}
+
+	a := New(mock, newCalcRegistry(t),
+		WithMaxSteps(8),
+		WithContextPolicy(ContextPolicy{MaxTokens: 25, RetainRecent: 1}),
+	)
+	_, err := collect(t, a.Run(context.Background(), "loop"))
+	if err != nil {
+		t.Fatalf("unexpected error (pairing broke or compaction failed): %v", err)
+	}
+	if !mock.compactionObserved {
+		t.Error("expected history to shrink at least once (compaction did not trigger)")
+	}
+}
+
+// validatingMockLLM wraps mockLLM and asserts every request it receives has
+// valid tool_call/tool_result pairing; it also notes when the message count
+// drops between calls (evidence of compaction).
+type validatingMockLLM struct {
+	inner              mockLLM
+	prevLen            int
+	compactionObserved bool
+}
+
+func (m *validatingMockLLM) Chat(ctx context.Context, messages []llm.Message, opts ...llm.Option) (*llm.Response, error) {
+	if m.prevLen > 0 && len(messages) < m.prevLen {
+		m.compactionObserved = true
+	}
+	m.prevLen = len(messages)
+	// Reject any request with broken tool pairing — mimics the real API's 400.
+	if err := pairingError(messages); err != nil {
+		return nil, err
+	}
+	return m.inner.Chat(ctx, messages, opts...)
+}
+
+func (m *validatingMockLLM) ChatStream(ctx context.Context, messages []llm.Message, opts ...llm.Option) iter.Seq2[llm.Chunk, error] {
+	return m.inner.ChatStream(ctx, messages, opts...)
+}
+
 func TestSimpleAgent_consumerBreaksEarly(t *testing.T) {
 	mock := &mockLLM{responses: []llm.Response{
 		{Message: llm.AssistantMessage("first"), StopReason: llm.StopReasonEnd},
