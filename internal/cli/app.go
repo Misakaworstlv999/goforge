@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
+	"sort"
 
 	"github.com/Misakaworstlv999/goforge/internal/config"
 	"github.com/Misakaworstlv999/goforge/pkg/agent"
@@ -105,26 +105,36 @@ func (a *App) buildRegistry(ctx context.Context) *tool.Registry {
 	return reg
 }
 
-// registerMCPServers connects each configured MCP server (stdio) and registers
-// its tools. A server that fails to connect is skipped with a warning so it
-// can't take down the rest of the toolset.
+// registerMCPServers loads the standard mcpServers config and registers each
+// server's tools. A missing config file means no servers; a server that fails
+// to parse or connect is skipped with a warning so it can't take down the rest
+// of the toolset. Servers are processed in sorted name order for determinism.
 func (a *App) registerMCPServers(ctx context.Context, reg *tool.Registry) {
-	for _, spec := range a.cfg.MCPServers {
-		fields := strings.Fields(spec)
-		if len(fields) == 0 {
+	sc, err := mcpclient.LoadServersConfig(a.cfg.MCPConfigPath)
+	if err != nil {
+		fmt.Fprintf(a.out, "warning: MCP config %s ignored: %v\n", a.cfg.MCPConfigPath, err)
+		return
+	}
+
+	names := make([]string, 0, len(sc.MCPServers))
+	for name := range sc.MCPServers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		cfg, err := sc.MCPServers[name].ToConfig(name)
+		if err != nil {
+			fmt.Fprintf(a.out, "warning: MCP server %q skipped: %v\n", name, err)
 			continue
 		}
-		client, err := mcpclient.New(ctx, mcpclient.Config{
-			Kind:    mcpclient.Stdio,
-			Command: fields[0],
-			Args:    fields[1:],
-		})
+		client, err := mcpclient.New(ctx, cfg)
 		if err != nil {
-			fmt.Fprintf(a.out, "warning: MCP server %q disabled: %v\n", fields[0], err)
+			fmt.Fprintf(a.out, "warning: MCP server %q disabled: %v\n", name, err)
 			continue
 		}
 		if err := reg.RegisterSet(ctx, client); err != nil {
-			fmt.Fprintf(a.out, "warning: MCP server %q tools skipped: %v\n", fields[0], err)
+			fmt.Fprintf(a.out, "warning: MCP server %q tools skipped: %v\n", name, err)
 			_ = client.Close()
 			continue
 		}

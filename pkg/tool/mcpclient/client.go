@@ -7,6 +7,8 @@ package mcpclient
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"os"
 	"os/exec"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -20,8 +22,10 @@ type TransportKind int
 const (
 	// Stdio launches the server as a subprocess and speaks over its stdio.
 	Stdio TransportKind = iota
-	// HTTP connects to a streamable-HTTP MCP endpoint.
-	HTTP
+	// StreamableHTTP connects to a streamable-HTTP MCP endpoint (modern remote).
+	StreamableHTTP
+	// SSE connects to a server-sent-events MCP endpoint (2024-11-05 transport).
+	SSE
 )
 
 // Config describes one MCP server connection.
@@ -29,9 +33,11 @@ type Config struct {
 	Name    string // client identity sent to the server
 	Version string
 	Kind    TransportKind
-	Command string   // Stdio: program to run
-	Args    []string // Stdio: program arguments
-	URL     string   // HTTP: streamable endpoint
+	Command string            // Stdio: program to run
+	Args    []string          // Stdio: program arguments
+	Env     map[string]string // Stdio: extra environment (merged over os.Environ)
+	URL     string            // StreamableHTTP/SSE: endpoint
+	Headers map[string]string // StreamableHTTP/SSE: extra HTTP headers (e.g. auth)
 }
 
 // session is the narrow slice of the SDK ClientSession this package needs. It
@@ -84,15 +90,50 @@ func newTransport(cfg Config) (mcpsdk.Transport, error) {
 		if cfg.Command == "" {
 			return nil, fmt.Errorf("mcp stdio transport requires a command")
 		}
-		return &mcpsdk.CommandTransport{Command: exec.Command(cfg.Command, cfg.Args...)}, nil
-	case HTTP:
-		if cfg.URL == "" {
-			return nil, fmt.Errorf("mcp http transport requires a url")
+		cmd := exec.Command(cfg.Command, cfg.Args...)
+		if len(cfg.Env) > 0 {
+			cmd.Env = os.Environ()
+			for k, v := range cfg.Env {
+				cmd.Env = append(cmd.Env, k+"="+v)
+			}
 		}
-		return &mcpsdk.StreamableClientTransport{Endpoint: cfg.URL}, nil
+		return &mcpsdk.CommandTransport{Command: cmd}, nil
+	case StreamableHTTP:
+		if cfg.URL == "" {
+			return nil, fmt.Errorf("mcp streamable-http transport requires a url")
+		}
+		return &mcpsdk.StreamableClientTransport{Endpoint: cfg.URL, HTTPClient: httpClient(cfg.Headers)}, nil
+	case SSE:
+		if cfg.URL == "" {
+			return nil, fmt.Errorf("mcp sse transport requires a url")
+		}
+		return &mcpsdk.SSEClientTransport{Endpoint: cfg.URL, HTTPClient: httpClient(cfg.Headers)}, nil
 	default:
 		return nil, fmt.Errorf("unknown mcp transport kind %d", cfg.Kind)
 	}
+}
+
+// httpClient returns an *http.Client that injects the given headers on every
+// request, or nil when there are none (the SDK then uses http.DefaultClient).
+func httpClient(headers map[string]string) *http.Client {
+	if len(headers) == 0 {
+		return nil
+	}
+	return &http.Client{Transport: headerRoundTripper{headers: headers, base: http.DefaultTransport}}
+}
+
+type headerRoundTripper struct {
+	headers map[string]string
+	base    http.RoundTripper
+}
+
+func (h headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Clone to avoid mutating a shared request.
+	r := req.Clone(req.Context())
+	for k, v := range h.headers {
+		r.Header.Set(k, v)
+	}
+	return h.base.RoundTrip(r)
 }
 
 // Tools discovers the server's tools (paginating via cursor) and adapts each
