@@ -78,6 +78,8 @@ func DefaultCompact(ctx context.Context, client llm.LLM, messages []llm.Message,
 }
 
 // compactMessages is the retain-parameterized implementation behind DefaultCompact.
+// It reduces only what is sent to the model; the lossless original is preserved
+// out-of-band by the agent's transcript sink (see WithTranscriptSink).
 func compactMessages(ctx context.Context, client llm.LLM, messages []llm.Message, budget, retain int) ([]llm.Message, error) {
 	if budget <= 0 || len(messages) == 0 {
 		return messages, nil

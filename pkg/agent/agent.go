@@ -35,6 +35,7 @@ type SimpleAgent struct {
 	maxSteps    int
 	toolTimeout time.Duration
 	policy      ContextPolicy
+	transcript  func(llm.Message)
 }
 
 // Option configures a SimpleAgent.
@@ -62,6 +63,16 @@ func WithMaxSteps(n int) Option {
 // WithToolTimeout sets a per-tool execution deadline. Zero means no timeout.
 func WithToolTimeout(d time.Duration) Option {
 	return func(a *SimpleAgent) { a.toolTimeout = d }
+}
+
+// WithTranscriptSink registers a sink that receives every message as it is added
+// to the live conversation — the seeded system/source/task messages, each
+// assistant response, and each tool result — in order, as produced. It is the
+// durable-log seam (M5-003): the sink captures the FULL, lossless transcript,
+// while in-loop compaction only ever reduces what is SENT to the model (the
+// compacted projection is never sent to the sink). nil ⇒ no transcript capture.
+func WithTranscriptSink(sink func(llm.Message)) Option {
+	return func(a *SimpleAgent) { a.transcript = sink }
 }
 
 // WithContextPolicy enables context engineering: source injection before the
@@ -109,8 +120,19 @@ func (a *SimpleAgent) Run(ctx context.Context, task string) iter.Seq2[Event, err
 		}
 
 		messages := make([]llm.Message, 0, 4)
+		// record appends a message to the live conversation and forwards it to the
+		// transcript sink (the durable-log seam). Compaction reassigns messages
+		// directly, never through record, so the lossless original stays in the
+		// sink while the sent context is reduced.
+		record := func(m llm.Message) {
+			messages = append(messages, m)
+			if a.transcript != nil {
+				a.transcript(m)
+			}
+		}
+
 		if a.system != "" {
-			messages = append(messages, llm.SystemMessage(a.system))
+			record(llm.SystemMessage(a.system))
 		}
 		// Inject context sources ahead of the task (the long-term-memory seam).
 		// Strict: a failing source aborts the run — silently dropping retrieved
@@ -122,9 +144,11 @@ func (a *SimpleAgent) Run(ctx context.Context, task string) iter.Seq2[Event, err
 				yield(ErrorEvent(err, 0), err)
 				return
 			}
-			messages = append(messages, msgs...)
+			for _, m := range msgs {
+				record(m)
+			}
 		}
-		messages = append(messages, llm.UserMessage(task))
+		record(llm.UserMessage(task))
 
 		chatOpts := a.chatOpts()
 		lastUsage := 0 // provider-reported token count from the latest Chat
@@ -136,7 +160,7 @@ func (a *SimpleAgent) Run(ctx context.Context, task string) iter.Seq2[Event, err
 				return
 			}
 			lastUsage = resp.Usage.TotalTokens
-			messages = append(messages, resp.Message)
+			record(resp.Message)
 
 			// Surface any reasoning text the model produced this step.
 			if resp.Message.Content != "" {
@@ -166,7 +190,7 @@ func (a *SimpleAgent) Run(ctx context.Context, task string) iter.Seq2[Event, err
 				if !yield(ToolResultEvent(r, step), nil) {
 					return
 				}
-				messages = append(messages, llm.ToolMessage(r.CallID, r.Content, r.IsError))
+				record(llm.ToolMessage(r.CallID, r.Content, r.IsError))
 			}
 
 			// Budget check: prefer the provider's real token count, fall back to

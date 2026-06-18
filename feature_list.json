@@ -19,7 +19,9 @@
           "id": "M1-002",
           "name": "Message Types",
           "description": "Define provider-agnostic Message, Role, ToolCall, ToolResult, Response types in pkg/llm/",
-          "dependencies": ["M1-001"],
+          "dependencies": [
+            "M1-001"
+          ],
           "status": "done",
           "evidence": "pkg/llm/message.go (85 lines) + message_test.go (64 lines)"
         },
@@ -27,7 +29,9 @@
           "id": "M1-003",
           "name": "LLM Interface",
           "description": "Define LLM interface with Chat() and ChatStream() returning iter.Seq2[Chunk, error]. Define Option pattern.",
-          "dependencies": ["M1-002"],
+          "dependencies": [
+            "M1-002"
+          ],
           "status": "done",
           "evidence": "pkg/llm/llm.go (25 lines) + option.go (54 lines) + option_test.go (110 lines)"
         },
@@ -35,7 +39,9 @@
           "id": "M1-004",
           "name": "OpenAI-Compatible Provider",
           "description": "Thin adapter over openai-go SDK. Message conversion, streaming via SDK. Works with OpenAI, DeepSeek, Ollama.",
-          "dependencies": ["M1-003"],
+          "dependencies": [
+            "M1-003"
+          ],
           "status": "done",
           "evidence": "pkg/llm/openai/provider.go (240 lines) + provider_test.go. SDK: openai/openai-go v1.12.0"
         },
@@ -43,7 +49,9 @@
           "id": "M1-005",
           "name": "Anthropic Provider",
           "description": "Thin adapter over anthropic-sdk-go. Messages API, streaming, tool_use block conversion.",
-          "dependencies": ["M1-003"],
+          "dependencies": [
+            "M1-003"
+          ],
           "status": "done",
           "evidence": "pkg/llm/anthropic/provider.go (287 lines) + provider_test.go. SDK: anthropics/anthropic-sdk-go v1.48.0"
         },
@@ -51,7 +59,9 @@
           "id": "M1-006",
           "name": "CLI Chat Demo",
           "description": "Simple CLI that reads user input, sends to LLM, prints streaming response. First runnable demo.",
-          "dependencies": ["M1-004"],
+          "dependencies": [
+            "M1-004"
+          ],
           "status": "done",
           "evidence": "cmd/goforge/main.go (94 lines). Supports -provider, -model, -base-url, -api-key, -system flags"
         }
@@ -68,7 +78,9 @@
           "id": "M2-001",
           "name": "Tool Interface",
           "description": "Define Tool interface: Name(), Description(), Schema(), Execute(). Define ToolSet interface for dynamic tool collections.",
-          "dependencies": ["M1-003"],
+          "dependencies": [
+            "M1-003"
+          ],
           "status": "done",
           "evidence": "pkg/tool/tool.go (62 lines) + tool_test.go (7 tests). Single Tool interface shipped; ToolSet (dynamic collections) split out to M2-006, with the MCP-client ToolSet in M2-007."
         },
@@ -76,7 +88,9 @@
           "id": "M2-002",
           "name": "JSON Schema Generation",
           "description": "Implement NewTool[Args] generic constructor that generates JSON Schema from Go struct tags via reflection.",
-          "dependencies": ["M2-001"],
+          "dependencies": [
+            "M2-001"
+          ],
           "status": "done",
           "evidence": "NewTool[Args] in pkg/tool/tool.go via invopop/jsonschema v0.14.0, DoNotReference for inline schemas"
         },
@@ -84,7 +98,9 @@
           "id": "M2-003",
           "name": "Tool Registry",
           "description": "Tool registry: register/lookup by name, list all schemas for LLM request, concurrent-safe.",
-          "dependencies": ["M2-002"],
+          "dependencies": [
+            "M2-002"
+          ],
           "status": "done",
           "evidence": "pkg/tool/registry.go (89 lines) + registry_test.go (7 tests, race-safe concurrent access)"
         },
@@ -92,7 +108,9 @@
           "id": "M2-004",
           "name": "Built-in Tools: Calculator + Clock",
           "description": "Two trivial tools to validate the tool system end-to-end: calculator (add/multiply) and current time.",
-          "dependencies": ["M2-003"],
+          "dependencies": [
+            "M2-003"
+          ],
           "status": "done",
           "evidence": "pkg/tool/builtin/calc.go + clock.go + tests (13 subtests)"
         },
@@ -100,7 +118,10 @@
           "id": "M2-005",
           "name": "Tool Calling Integration",
           "description": "Wire tool schemas into LLM request, parse tool_calls from response, execute and return results. Single-step only (no loop yet).",
-          "dependencies": ["M2-004", "M1-004"],
+          "dependencies": [
+            "M2-004",
+            "M1-004"
+          ],
           "status": "done",
           "evidence": "pkg/tool/executor.go + cmd/goforge/main.go -tools mode; fix openai ToolMessage(content, toolCallID) arg order"
         },
@@ -108,7 +129,9 @@
           "id": "M2-006",
           "name": "ToolSet Interface",
           "description": "Define the ToolSet interface for dynamic, runtime-discovered tool collections (deferred from M2-001). ToolSet exposes Tools(ctx) []Tool; the Registry consumes a ToolSet to register its tools, so dynamic and static tools share one execution path. Foundational Ring 2 capability — scheduled NEXT, before M5.",
-          "dependencies": ["M2-003"],
+          "dependencies": [
+            "M2-003"
+          ],
           "status": "done",
           "evidence": "pkg/tool/toolset.go — ToolSet interface (Tools(ctx)([]Tool,error)) + Registry.RegisterSet; toolset_test.go (fake set, resolve-error passthrough, duplicate-name)."
         },
@@ -116,7 +139,10 @@
           "id": "M2-007",
           "name": "MCP Client (ToolSet impl)",
           "description": "MCP CLIENT: consume external MCP servers and adapt their tools into our Tool interface (an implementation of the M2-006 ToolSet — exactly how Eino/tRPC/ADK do it). Dynamic discovery via ListTools, execution via CallTool; transports stdio + streamable HTTP. SDK: official modelcontextprotocol/go-sdk (pure Go, satisfies no-CGO/single-binary; ADK uses it). This is FOUNDATIONAL — it lets GoForge agents reuse the whole MCP tool ecosystem (filesystem, git, etc.) — and is wired BEFORE M5. (MCP server side is M7-005, deprioritized.)",
-          "dependencies": ["M2-006", "M3-004"],
+          "dependencies": [
+            "M2-006",
+            "M3-004"
+          ],
           "status": "done",
           "evidence": "pkg/tool/mcpclient/ (SDK isolated here): client.go (Connect, cursor-paginated Tools, Close, three transports stdio/streamable-HTTP/SSE with env + header-injecting http.Client, narrow session iface) + tool.go (adapter: InputSchema→json.RawMessage, Arguments passthrough, TextContent extraction, IsError→error) + serverconfig.go (standard mcpServers schema: ServerSpec/LoadServersConfig/ToConfig, url⇒remote/type, else stdio). Tests: fake-session unit + ToConfig routing + header injection + real-SDK in-memory integration, -race. CLI: -mcp-config / GOFORGE_MCP_CONFIG points at a .mcp.json (Claude Desktop / Cursor format); connect → RegisterSet → Close on exit. dep: modelcontextprotocol/go-sdk v1.6.1 (CGO_ENABLED=0 verified)."
         },
@@ -124,7 +150,9 @@
           "id": "M2-008",
           "name": "MCP Hardening (OAuth + tool-name prefix + progressive disclosure)",
           "description": "Production hardening of the MCP client: (1) OAuth2 for remote servers; (2) per-server tool-name prefixing + charset sanitization to avoid collisions; (3) progressive disclosure (broker) so many MCP tools don't bloat the system prompt.",
-          "dependencies": ["M2-007"],
+          "dependencies": [
+            "M2-007"
+          ],
           "status": "done",
           "evidence": "OAuth2: Config.TokenSource → oauth2.Transport HTTPClient (works for streamable+SSE; SSE has no SDK OAuth hook); .mcp.json 'oauth' block → clientcredentials TokenSource. Prefix: newMCPTool(prefix) → sanitizeToolName(prefix_remoteName) (NFD charset sanitize via golang.org/x/text), remoteName preserved for CallTool; CLI prefixes by server key (fixes MCP read_file vs builtin clash). Broker: pkg/tool/mcpclient/broker.go exposes 3 meta-tools (mcp_list_tools/describe/call) over an index of tool.Tool, enabled via -mcp-expose broker (default direct). Tests: oauth header injection, ToConfig oauth, prefix+remoteName, broker list/describe/call/unknown — all -race. deps: golang.org/x/oauth2 + x/text promoted to direct; CGO_ENABLED=0 verified."
         },
@@ -132,7 +160,9 @@
           "id": "M2-009",
           "name": "Interactive OAuth (authorization code)",
           "description": "Interactive OAuth 2.1 authorization-code flow (browser login + consent) for remote MCP servers, beyond M2-008's unattended client-credentials. SDK handles discovery + dynamic client registration + PKCE + token exchange/refresh; we supply the browser+callback leg.",
-          "dependencies": ["M2-008"],
+          "dependencies": [
+            "M2-008"
+          ],
           "status": "done",
           "evidence": "pkg/tool/mcpclient/oauth.go: browserAuthFetcher (injectable openFunc opens OS browser; one-shot localhost callback server captures ?code=&state=) + newAuthCodeHandler (auth.NewAuthorizationCodeHandler with DCR by default, or preregistered client) → Config.OAuthHandler set on StreamableClientTransport. serverconfig.go OAuthSpec.Flow=authorization_code|client_credentials + RedirectPort (default 8765); SSE+authcode rejected. Token in-session only (SDK has no token store; cross-run persistence deferred). Tests: fetcher capture/error/timeout via fake browser, ToConfig flow routing, SSE rejection — all -race. CGO_ENABLED=0 verified."
         }
@@ -149,7 +179,9 @@
           "id": "M3-001",
           "name": "Event Types",
           "description": "Define Event sum type: ThinkEvent, ToolCallEvent, ToolResultEvent, FinalResponseEvent, ErrorEvent.",
-          "dependencies": ["M2-001"],
+          "dependencies": [
+            "M2-001"
+          ],
           "status": "done",
           "evidence": "pkg/agent/event.go — enum EventType + tagged Event struct (reuses Ring 1 ToolCall/ToolResult/Usage) + 5 constructors + String(); event_test.go (table-driven, 11 subtests)"
         },
@@ -157,7 +189,10 @@
           "id": "M3-002",
           "name": "ReAct Loop",
           "description": "Core ~200-line ReAct loop: while(tool_calls) { call LLM → execute tools → append results }. max_steps guard. Returns iter.Seq2[Event, error].",
-          "dependencies": ["M3-001", "M2-005"],
+          "dependencies": [
+            "M3-001",
+            "M2-005"
+          ],
           "status": "done",
           "evidence": "pkg/agent/agent.go SimpleAgent.Run — iter.Seq2 yield loop, maxSteps guard (default 10), ErrMaxStepsExceeded, early-break handling; agent_test.go via scripted mockLLM"
         },
@@ -165,7 +200,9 @@
           "id": "M3-003",
           "name": "Parallel Tool Execution",
           "description": "When LLM returns multiple tool_calls, execute them concurrently via goroutine + errgroup. Timeout per tool.",
-          "dependencies": ["M3-002"],
+          "dependencies": [
+            "M3-002"
+          ],
           "status": "done",
           "evidence": "pkg/tool/executor.go ExecuteParallel — errgroup, order-preserving results, per-tool context timeout, one failure doesn't cancel others; golang.org/x/sync promoted to direct dep; executor_test.go (order/failure-isolation/timeout, -race clean)"
         },
@@ -173,7 +210,9 @@
           "id": "M3-004",
           "name": "Agent Interface",
           "description": "Define Agent interface with Run(ctx, task) iter.Seq2[Event, error]. Implement SimpleAgent wrapping ReAct loop.",
-          "dependencies": ["M3-003"],
+          "dependencies": [
+            "M3-003"
+          ],
           "status": "done",
           "evidence": "pkg/agent/agent.go — Agent interface (boundary) + SimpleAgent concrete impl + functional Options (WithSystemPrompt/WithModel/WithMaxSteps/WithToolTimeout) + compile-time assertion; wired into CLI -agent mode (cmd/goforge/main.go runAgentMode/handleAgentChat)"
         },
@@ -181,7 +220,9 @@
           "id": "M3-005",
           "name": "Built-in Tools: File + Shell",
           "description": "File read/write/list and shell exec tools with basic sandboxing (allowed dirs, command allowlist).",
-          "dependencies": ["M2-002"],
+          "dependencies": [
+            "M2-002"
+          ],
           "status": "done",
           "evidence": "pkg/tool/builtin/sandbox.go (resolvePath: filepath.Rel containment + EvalSymlinks anti-escape; command allowlist), file.go (read_file/write_file/list_files), shell.go (exec_command, no-shell exec + per-call timeout + output cap). Wired into CLI: file tools always on (rooted at -workdir/cwd), exec_command opt-in via -allow-commands. Tests cover traversal/symlink-escape/allowlist/timeout under -race"
         }
@@ -198,7 +239,9 @@
           "id": "M4-001",
           "name": "Token Counter",
           "description": "Token counting utility (tiktoken-go or simple word-based estimator). Counts messages, tool results, system prompts.",
-          "dependencies": ["M1-002"],
+          "dependencies": [
+            "M1-002"
+          ],
           "status": "done",
           "evidence": "pkg/agent/token.go — TokenCounter interface + Estimator with configurable RunesPerToken (default 4; CJK ~2, required for Chinese content); tiktoken avoided (CGO/BPE vs no-CGO). Runtime budget uses real llm.Usage, estimator is fallback. token_test.go"
         },
@@ -206,7 +249,9 @@
           "id": "M4-002",
           "name": "ContextPolicy",
           "description": "Define ContextPolicy struct: MaxTokens, Sources ([]ContextSource func type — the pluggable seam for retrieval-augmented context incl. future long-term memory / vector retrieval, see M8), Breadth, Depth, RetainRecent, Compact (CompactFunc), Counter. Agents configured via WithContextPolicy.",
-          "dependencies": ["M4-001"],
+          "dependencies": [
+            "M4-001"
+          ],
           "status": "done",
           "evidence": "pkg/agent/context.go — ContextPolicy + Breadth/Depth enums + ContextSource/CompactFunc func types; zero value disables (preserves baseline). context_test.go"
         },
@@ -214,7 +259,10 @@
           "id": "M4-003",
           "name": "Three-Tier Compaction",
           "description": "Budget check (drop oldest tool results) → micro-compact (truncate long outputs) → full compaction (LLM-based summarization). Inspired by Claude Code.",
-          "dependencies": ["M4-002", "M3-002"],
+          "dependencies": [
+            "M4-002",
+            "M3-002"
+          ],
           "status": "done",
           "evidence": "pkg/agent/context.go DefaultCompact — middle-out, round-atomic (never orphans tool_call/result, which OpenAI/Anthropic reject); preserves system + first user + RetainRecent tail; best-effort termination. Tests assert no-orphan-pairing + live validation in agent loop"
         },
@@ -222,7 +270,9 @@
           "id": "M4-004",
           "name": "System Prompt Engineering",
           "description": "Configurable system prompt builder: role definition + stage instructions + tool descriptions + context policy directives.",
-          "dependencies": ["M4-002"],
+          "dependencies": [
+            "M4-002"
+          ],
           "status": "done",
           "evidence": "pkg/agent/prompt.go BuildSystemPrompt(role, tools, policy) — role + sorted tool list + breadth/depth strategy hint; pure & deterministic (cache-friendly). prompt_test.go"
         },
@@ -230,7 +280,9 @@
           "id": "M4-005",
           "name": "ContextSource Seam",
           "description": "Wire ContextPolicy.Sources into SimpleAgent.Run (load + inject before task) + StaticSource trivial impl. The concrete integration point for long-term memory / retrieval (M8). Source failure aborts the run (strict).",
-          "dependencies": ["M4-002"],
+          "dependencies": [
+            "M4-002"
+          ],
           "status": "done",
           "evidence": "pkg/agent/agent.go WithContextPolicy + Run injects sources after system/before task; StaticSource in context.go; agent_test.go covers injection order + strict-abort-on-source-error"
         }
@@ -247,41 +299,51 @@
           "id": "M5-001",
           "name": "Stage Interface",
           "description": "Define Stage[In, Out] with Run() and Verify() (verification gate). Define Gate types: Auto, LLMReview, HumanApproval. Stage[In,Out] is the EXPLICIT inter-agent handoff channel: one stage's typed output becomes the next stage's input (the per-agent ContextPolicy is vertical/independent; this is the horizontal passing between agents).",
-          "dependencies": ["M3-004"],
-          "status": "not-started",
-          "evidence": ""
+          "dependencies": [
+            "M3-004"
+          ],
+          "status": "done",
+          "evidence": "pkg/pipeline/stage.go: Stage[In,Out]+compile() 类型擦除 node;Gate(Auto/LLMReview/Human);RunAgent;每阶段 Tools 白名单(多 agent 工具分工,过滤共享 registry)。stage_test/tools_test 覆盖类型断言/三种 gate/工具子集。"
         },
         {
           "id": "M5-002",
           "name": "Pipeline FSM",
           "description": "Finite state machine: stage registration, conditional routing (next/retry/fail), maxRetries per stage. ~300 lines. PipelineState carries a named-key SHARED CONTEXT region (a blackboard, e.g. map[string]any or typed) — this is the inter-agent memory-SHARING mechanism (cf. ADK session.State / StateDelta, Eino AddSessionValue/GetSessionValue session keys). A stage's agent READS shared state via a ContextSource (the M4-005 seam) bound to PipelineState, and WRITES results back via the Stage output or a memory tool (M8). Deliberately keeps the Agent interface unchanged — sharing is composed from ContextSource (read) + Stage output / tool (write), not a new Agent capability.",
-          "dependencies": ["M5-001"],
-          "status": "not-started",
-          "evidence": ""
+          "dependencies": [
+            "M5-001"
+          ],
+          "status": "done",
+          "evidence": "pkg/pipeline/{state.go,pipeline.go,event.go}: 共享黑板 State(Reducer/temp:/StateSource M4 接缝);有环可路由 FSM(顺序+条件分支+回边+重试+WithMaxSteps runaway 守卫)。pipeline_test 覆盖线性/分支/回边环/重试耗尽/黑板交接。"
         },
         {
           "id": "M5-003",
           "name": "Checkpoint Store",
           "description": "SQLite-backed checkpoint: serialize PipelineState via gob, save/restore on stage transitions. Pipeline survives process restarts. MUST persist the FULL conversation history (durable log), not just FSM state — so M4 compaction becomes a lossy *projection* sent to the model, while the original remains recoverable. Add the deferred ContextPolicy.OnEvict hook here (compaction writes evicted/truncated content to this store before dropping it). Separates 'what is sent' (reduced) from 'what is stored' (lossless), matching Eino/tRPC/ADK.",
-          "dependencies": ["M5-002"],
-          "status": "not-started",
-          "evidence": ""
+          "dependencies": [
+            "M5-002"
+          ],
+          "status": "done",
+          "evidence": "pkg/pipeline/{checkpoint.go,sqlite.go}: CheckpointStore(Save/Load/List/AppendHistory/History/Audit/AuditLog) + MemoryStore + SQLiteStore(modernc.org/sqlite 纯 Go,无 CGO);gob 快照。durable log = 完整 transcript(append-on-produce):agent.WithTranscriptSink 每条消息即时回调→RunAgent→store.AppendHistory,存无损全量/发压缩投影;History(ctx,id) 读回。跨 stage 连续性显式 opt-in:pipeline.HistorySource(store,pipelineID,limit) 渲染成只读上下文消息(避免 tool 配对污染)。FSM 快照不扛历史。checkpoint_test 双实现往返 + durable_log 完整 transcript 测试 + HistorySource 测试。"
         },
         {
           "id": "M5-004",
           "name": "Interrupt / Resume",
           "description": "Human-in-the-loop: pipeline pauses at HumanApproval gates, persists state, resumes when approval arrives via API or CLI.",
-          "dependencies": ["M5-003"],
-          "status": "not-started",
-          "evidence": ""
+          "dependencies": [
+            "M5-003"
+          ],
+          "status": "done",
+          "evidence": "pkg/pipeline/pipeline.go: HumanGate→StatusPaused→EventPaused;Resume(Decision) 还原 checkpoint+黑板后批准前进/拒绝重跑。resume_test 覆盖新实例上 interrupt→resume 往返(批准/拒绝)+ 错误路径。"
         },
         {
           "id": "M5-005",
           "name": "Audit Log",
           "description": "Event audit table in SQLite: every stage transition, gate result, error, and resume action is logged with timestamp.",
-          "dependencies": ["M5-003"],
-          "status": "not-started",
-          "evidence": ""
+          "dependencies": [
+            "M5-003"
+          ],
+          "status": "done",
+          "evidence": "pkg/pipeline/{pipeline.go,sqlite.go}: 每次转移写 AuditEntry(enter/gate_pass/gate_fail/retry/interrupt/resume/complete/fail);SQLite audit 表按 id 保序。audit_test 覆盖线性转移序列 + retry/fail。"
         }
       ]
     },
@@ -296,7 +358,10 @@
           "id": "M6-001",
           "name": "Requirement Analysis Stage",
           "description": "Agent reads requirement description, analyzes scope, identifies affected components. Output: structured RequirementSpec.",
-          "dependencies": ["M5-002", "M4-002"],
+          "dependencies": [
+            "M5-002",
+            "M4-002"
+          ],
           "status": "not-started",
           "evidence": ""
         },
@@ -304,7 +369,9 @@
           "id": "M6-002",
           "name": "Technical Design Stage",
           "description": "Agent generates technical design doc based on RequirementSpec. Output: TechDesign with approach, files to modify, risks.",
-          "dependencies": ["M6-001"],
+          "dependencies": [
+            "M6-001"
+          ],
           "status": "not-started",
           "evidence": ""
         },
@@ -312,7 +379,10 @@
           "id": "M6-003",
           "name": "Coding Stage",
           "description": "Agent implements code changes per TechDesign using file/shell tools. Narrow+deep ContextPolicy. Output: CodeChanges (file diffs).",
-          "dependencies": ["M6-002", "M3-005"],
+          "dependencies": [
+            "M6-002",
+            "M3-005"
+          ],
           "status": "not-started",
           "evidence": ""
         },
@@ -320,7 +390,9 @@
           "id": "M6-004",
           "name": "Auto Review Stage",
           "description": "Evaluator-Optimizer pattern: review agent scores code quality, suggests improvements. If score < threshold, bounces back to Coding.",
-          "dependencies": ["M6-003"],
+          "dependencies": [
+            "M6-003"
+          ],
           "status": "not-started",
           "evidence": ""
         },
@@ -328,7 +400,9 @@
           "id": "M6-005",
           "name": "Testing Stage",
           "description": "Agent generates and runs tests. Validates build + lint + test pass. Output: TestReport.",
-          "dependencies": ["M6-004"],
+          "dependencies": [
+            "M6-004"
+          ],
           "status": "not-started",
           "evidence": ""
         },
@@ -336,7 +410,9 @@
           "id": "M6-006",
           "name": "Multi-Agent Orchestration",
           "description": "Orchestrator-Worker pattern: orchestrator decomposes tasks, spawns worker agents in parallel goroutines, synthesizes results.",
-          "dependencies": ["M6-003"],
+          "dependencies": [
+            "M6-003"
+          ],
           "status": "not-started",
           "evidence": ""
         }
@@ -353,7 +429,9 @@
           "id": "M7-001",
           "name": "HTTP API Server",
           "description": "REST API: POST /pipeline/trigger, GET /pipeline/{id}, POST /pipeline/{id}/resume, GET /health. net/http stdlib.",
-          "dependencies": ["M5-004"],
+          "dependencies": [
+            "M5-004"
+          ],
           "status": "not-started",
           "evidence": ""
         },
@@ -361,7 +439,9 @@
           "id": "M7-002",
           "name": "Webhook Handler",
           "description": "GitHub/GitLab webhook endpoint: receive MR comments, trigger pipeline resume or review.",
-          "dependencies": ["M7-001"],
+          "dependencies": [
+            "M7-001"
+          ],
           "status": "not-started",
           "evidence": ""
         },
@@ -369,7 +449,10 @@
           "id": "M7-003",
           "name": "CLI",
           "description": "Command-line interface: goforge chat (interactive), goforge run (trigger pipeline), goforge status. Single binary.",
-          "dependencies": ["M3-004", "M5-002"],
+          "dependencies": [
+            "M3-004",
+            "M5-002"
+          ],
           "status": "not-started",
           "evidence": ""
         },
@@ -377,7 +460,10 @@
           "id": "M7-004",
           "name": "Observability",
           "description": "OpenTelemetry: trace spans per pipeline stage and agent step, metrics for token usage and latency. Zap structured logging throughout.",
-          "dependencies": ["M5-002", "M3-002"],
+          "dependencies": [
+            "M5-002",
+            "M3-002"
+          ],
           "status": "not-started",
           "evidence": ""
         },
@@ -385,7 +471,9 @@
           "id": "M7-005",
           "name": "MCP Server",
           "description": "MCP SERVER side: expose GoForge itself as an MCP server (tools for triggering pipelines, querying status) for Cursor/Claude. DEPRIORITIZED / optional — none of Eino/tRPC/ADK ship a native MCP server (they're MCP clients only); product-facing, low foundational value. The high-value MCP client is M2-007. Build only if a concrete integration need arises.",
-          "dependencies": ["M7-001"],
+          "dependencies": [
+            "M7-001"
+          ],
           "status": "not-started",
           "evidence": ""
         },
@@ -393,7 +481,9 @@
           "id": "M7-006",
           "name": "README and Documentation",
           "description": "Complete README with architecture diagram, quickstart, API reference. Ensure all docs pass desensitization scan.",
-          "dependencies": ["M6-005"],
+          "dependencies": [
+            "M6-005"
+          ],
           "status": "not-started",
           "evidence": ""
         }
@@ -411,7 +501,9 @@
           "id": "M8-001",
           "name": "Retriever + MemoryStore Interfaces",
           "description": "Narrow Retriever (Retrieve(ctx, query) []Document) + MemoryStore (Add/Search/Delete, user/project scoped) interfaces + Document type. Boundary interfaces; backends concrete.",
-          "dependencies": ["M4-005"],
+          "dependencies": [
+            "M4-005"
+          ],
           "status": "not-started",
           "evidence": ""
         },
@@ -419,7 +511,9 @@
           "id": "M8-002",
           "name": "Embedder Interface + Remote Default",
           "description": "Embedder interface + default impl over a remote embeddings API (OpenAI-compatible). No local model → preserves no-CGO/single-binary.",
-          "dependencies": ["M8-001"],
+          "dependencies": [
+            "M8-001"
+          ],
           "status": "not-started",
           "evidence": ""
         },
@@ -427,7 +521,9 @@
           "id": "M8-003",
           "name": "Vector Store Backend",
           "description": "Pluggable vector store. Pure-Go in-memory cosine search first (zero-dep, CGO-free); interface allows pgvector / external vector service adapters later.",
-          "dependencies": ["M8-002"],
+          "dependencies": [
+            "M8-002"
+          ],
           "status": "not-started",
           "evidence": ""
         },
@@ -435,7 +531,11 @@
           "id": "M8-004",
           "name": "Memory Integration (ContextSource + Tool)",
           "description": "Expose retrieval as a ContextSource (automatic pre-step injection) AND as memory_search / memory_add tools (agent-driven). Reuses the M4-005 seam + Ring 2 Tool. ALSO provide a retrieval tool for compaction-offloaded content (Eino offload+ReadFileTool pattern): content evicted by M4 compaction (via the M5-003 OnEvict store) is embedded/indexed so the agent can pull it back on demand — turning lossy compaction into 'moved to cold storage, recoverable' rather than data loss.",
-          "dependencies": ["M8-003", "M4-005", "M2-003"],
+          "dependencies": [
+            "M8-003",
+            "M4-005",
+            "M2-003"
+          ],
           "status": "not-started",
           "evidence": ""
         },
@@ -443,7 +543,10 @@
           "id": "M8-005",
           "name": "Auto Memory Extraction",
           "description": "Distill facts/episodes from completed pipeline runs / sessions into the memory store, scoped by project. Inspired by tRPC-Agent-Go auto-memory.",
-          "dependencies": ["M8-004", "M5-003"],
+          "dependencies": [
+            "M8-004",
+            "M5-003"
+          ],
           "status": "not-started",
           "evidence": ""
         }
