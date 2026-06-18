@@ -362,8 +362,8 @@
             "M5-002",
             "M4-002"
           ],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/workflow/{types.go,stages.go}: AcceptancePoint(Kind/Status,JSON string round-trip)+Spec/Design/CodeChange/TestReport;acceptanceReducer(按ID合并)+decodeJSON容错;NewRequirementStage 产≥1验收点写黑板契约,gate 断言。unit 测试。"
         },
         {
           "id": "M6-002",
@@ -372,8 +372,8 @@
           "dependencies": [
             "M6-001"
           ],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "NewTechDesignStage(读黑板Spec→Design,携带Spec),gate 断言≥1文件。unit 测试。"
         },
         {
           "id": "M6-003",
@@ -383,8 +383,8 @@
             "M6-002",
             "M3-005"
           ],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "NewCodingStage(读Design→真实写文件,Stage.Tools=read/write/list/exec 沙箱工具子集,窄深ContextPolicy)。unit 测试。"
         },
         {
           "id": "M6-004",
@@ -393,8 +393,8 @@
           "dependencies": [
             "M6-003"
           ],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "NewReviewStage evaluator-optimizer:只读 reviewer(仅 read/list 工具)产 verdict;reviewRoute 失败回边 coding(非 GateFail——M5 语义区分自纠错 vs 返工)。unit 测试。"
         },
         {
           "id": "M6-005",
@@ -403,8 +403,8 @@
           "dependencies": [
             "M6-004"
           ],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "三测试层 NewTestStage(unit/integration/e2e 递进):阶段本身跑真实 go test,据真实退出码背书更新验收点;acceptance 门要求全部 Pass 否则回 coding;BuildDevWorkflow 装配有环图(RouteFunc 回边)。integration 测试覆盖 happy/review回边/测试失败回编码。"
         },
         {
           "id": "M6-006",
@@ -413,8 +413,8 @@
           "dependencies": [
             "M6-003"
           ],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/pipeline/parallel.go ParallelStage(errgroup fan-out + join,对 FSM 透明,-race 通过);workflow orchestrator-worker 用例(3 worker agent 并发 + reducer 分支安全 + join)。"
         }
       ]
     },
