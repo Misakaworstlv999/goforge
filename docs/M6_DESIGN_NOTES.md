@@ -81,7 +81,13 @@ M5 的 `Stage[In,Out]` 类型化交接对**线性链**完美(Out(前)==In(后)),
 ## 6. 多 Agent 编排(M6-006)
 
 - 每阶段 = 专职 agent:独立 system prompt(`agent.BuildSystemPrompt` 角色)+ 独立 `ContextPolicy`(需求 wide/shallow、
-  编码 narrow/deep)+ **工具子集**(M5 `Stage.Tools`:编码/测试拿 file+exec,**评审只读 read/list**——最小权限)。
+  编码 narrow/deep)+ **工具子集**(编码/测试拿 file+exec,**评审只读 read/list**——最小权限)。
+- **工具作用域:谓词式 `tool.Filter`(批量,非逐个列名)**。`Stage.Tools []string` 是精确名单(must-exist,适合少量内置);
+  `Stage.ToolFilter tool.Filter` 是谓词(select-matching),用 `tool.Prefix("github_")`(**整个 MCP server**)、`tool.Glob("*_read_*")`、
+  `Any/All/Not` 批量选择,无需枚举——MCP server 动辄几十个工具时必需。最终作用域 = `ToolFilter 命中 ∪ Tools 名单`(可组合)。
+  对照 ADK `Predicate`+`FilterToolset` / tRPC `FilterFunc`(谓词是通用机制,名单只是其上的便捷)。
+  **独有优势**:三家都不给 MCP 工具加 server 前缀,而我们加了(`server_tool`),故"某 server 全部工具"= 一次前缀匹配;
+  `mcpclient.ServerToolFilter("km-corp")` 直接给出。实现:`tool.Filter` + `Registry.Subset`(`pkg/tool/filter.go`)。
 - **`ParallelStage`**(`pkg/pipeline/parallel.go`):errgroup 并发子 stage + `join` 合并,**对 FSM 透明**(仍是单节点,
   checkpoint/resume/audit 保持线性)——兑现 M5→M6 延迟的并发项,**不建图运行时**。子 stage 经 reducer 守卫的黑板键做分支安全写入
   (深度 child-scope 隔离留后续)。orchestrator-worker 用例见 `parallel_test.go`(3 个 worker agent 并发实现、join 合成)。

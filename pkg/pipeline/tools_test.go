@@ -80,6 +80,46 @@ func TestPipeline_emptyToolsUsesFullRegistry(t *testing.T) {
 	}
 }
 
+func TestPipeline_toolFilterBulkScope(t *testing.T) {
+	type empty struct{}
+	mk := func(name string) tool.Tool {
+		return tool.NewTool(name, "d", func(context.Context, empty) (string, error) { return "ok", nil })
+	}
+	reg := tool.NewRegistry()
+	must(t, reg.Register(mk("write_file"), mk("github_create"), mk("github_read"), mk("jira_create")))
+
+	capture := func(deps StageDeps) []string {
+		var names []string
+		for _, s := range deps.Registry.Schemas() {
+			names = append(names, s.Name)
+		}
+		return names
+	}
+	var got []string
+
+	p := New(StageDeps{Registry: reg})
+	// "All of the github server, PLUS the write_file builtin" — no per-tool listing.
+	must(t, AddStage(p, Stage[string, string]{
+		Name:       "s",
+		ToolFilter: tool.Prefix("github_"),
+		Tools:      []string{"write_file"},
+		Run: func(_ context.Context, in string, deps StageDeps) (string, error) {
+			got = capture(deps)
+			return in, nil
+		},
+	}))
+
+	if _, err := collect(p.Run(context.Background(), "p", "x")); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, ",") != "github_create,github_read,write_file" {
+		t.Errorf("scoped tools = %v, want [github_create github_read write_file]", got)
+	}
+	if len(reg.Schemas()) != 4 {
+		t.Errorf("shared registry mutated: %d", len(reg.Schemas()))
+	}
+}
+
 func TestPipeline_unknownStageTool(t *testing.T) {
 	p := New(StageDeps{Registry: tool.NewRegistry()})
 	must(t, AddStage(p, Stage[string, string]{

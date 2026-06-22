@@ -48,32 +48,44 @@ type StageDeps struct {
 // into the default gate; Policy is the stage's independent M4 context strategy;
 // Gate (optional) decides pass/fail/await-human on the output.
 //
-// Tools is the stage's tool allowlist: the engine hands this stage's Run and
-// Gate a StageDeps whose Registry is the shared registry filtered to exactly
-// these names — so different stages/agents expose different tool subsets to the
-// LLM (multi-agent division of labor: a coding stage gets file/shell, a review
-// stage stays read-only). Empty ⇒ the full shared registry (backward compatible).
+// Tools and ToolFilter scope which tools this stage's agent sees (multi-agent
+// division of labor: a coding stage gets file/shell, a review stage stays
+// read-only). The engine hands the stage a StageDeps whose Registry is the
+// shared registry narrowed to:
+//
+//		(tools matching ToolFilter)  ∪  (the exact names in Tools)
+//
+//	  - Tools []string is an exact allowlist with must-exist semantics: an unknown
+//	    name fails the stage (catches typos). Good for a handful of builtins.
+//	  - ToolFilter tool.Filter is a predicate with select-matching semantics: it
+//	    scopes tools in BULK without enumerating names — e.g. tool.Prefix("github_")
+//	    for a whole MCP server, tool.Glob("*_read_*"), or combinators. Nothing
+//	    matching simply yields no tools (no error).
+//
+// Both are optional and compose. Both empty ⇒ the full shared registry.
 //
 // Stage[In, Out] is the TYPED authoring surface. The engine drives the
 // type-erased node it compiles to (see compile); In/Out are asserted once at the
 // stage boundary, never threaded through the engine.
 type Stage[In, Out any] struct {
-	Name   string
-	Run    func(ctx context.Context, in In, deps StageDeps) (Out, error)
-	Verify func(ctx context.Context, out Out) error
-	Policy agent.ContextPolicy
-	Gate   Gate
-	Tools  []string
+	Name       string
+	Run        func(ctx context.Context, in In, deps StageDeps) (Out, error)
+	Verify     func(ctx context.Context, out Out) error
+	Policy     agent.ContextPolicy
+	Gate       Gate
+	Tools      []string
+	ToolFilter tool.Filter
 }
 
 // node is the type-erased form of a Stage that the FSM executes. The In/Out
 // types live captured inside the run and gate closures.
 type node struct {
-	name   string
-	run    func(ctx context.Context, in any, deps StageDeps) (any, error)
-	gate   Gate
-	policy agent.ContextPolicy
-	tools  []string
+	name       string
+	run        func(ctx context.Context, in any, deps StageDeps) (any, error)
+	gate       Gate
+	policy     agent.ContextPolicy
+	tools      []string
+	toolFilter tool.Filter
 }
 
 // compile converts a typed Stage into the engine's type-erased node. The input
@@ -118,39 +130,42 @@ func (s Stage[In, Out]) compile() (node, error) {
 		return s.Run(ctx, typed, deps)
 	}
 
-	return node{name: s.Name, run: run, gate: gate, policy: s.Policy, tools: s.Tools}, nil
+	return node{name: s.Name, run: run, gate: gate, policy: s.Policy, tools: s.Tools, toolFilter: s.ToolFilter}, nil
 }
 
-// filterRegistry returns a view of reg containing only the named tools. An empty
-// name list (or nil reg) returns reg unchanged. A name absent from reg is an
-// error — a stage must not silently run with fewer tools than it declared.
-func filterRegistry(reg *tool.Registry, names []string) (*tool.Registry, error) {
-	if reg == nil || len(names) == 0 {
-		return reg, nil
-	}
-	sub := tool.NewRegistry()
-	for _, n := range names {
-		tl, ok := reg.Get(n)
-		if !ok {
-			return nil, fmt.Errorf("pipeline: stage tool %q not found in registry", n)
-		}
-		if err := sub.Register(tl); err != nil {
-			return nil, err
-		}
-	}
-	return sub, nil
-}
-
-// stageDeps returns deps with Registry narrowed to the stage's tool allowlist.
+// stageDeps returns deps with Registry narrowed to the stage's tool scope:
+// (tools matching toolFilter) ∪ (the exact names in tools). toolFilter is
+// select-matching (omits non-matches silently); the exact names are must-exist
+// (a missing name fails the stage, catching typos). With neither set, the full
+// shared registry is used.
 func (p *Pipeline) stageDeps(n node) (StageDeps, error) {
 	deps := p.deps
-	if len(n.tools) > 0 {
-		sub, err := filterRegistry(p.deps.Registry, n.tools)
-		if err != nil {
+	if n.toolFilter == nil && len(n.tools) == 0 {
+		return deps, nil
+	}
+	if p.deps.Registry == nil {
+		return StageDeps{}, fmt.Errorf("pipeline: stage %q scopes tools but no registry is configured", n.name)
+	}
+
+	var sub *tool.Registry
+	if n.toolFilter != nil {
+		sub = p.deps.Registry.Subset(n.toolFilter)
+	} else {
+		sub = tool.NewRegistry()
+	}
+	for _, name := range n.tools {
+		if _, ok := sub.Get(name); ok {
+			continue // already included by the filter
+		}
+		tl, ok := p.deps.Registry.Get(name)
+		if !ok {
+			return StageDeps{}, fmt.Errorf("pipeline: stage %q tool %q not found in registry", n.name, name)
+		}
+		if err := sub.Register(tl); err != nil {
 			return StageDeps{}, err
 		}
-		deps.Registry = sub
 	}
+	deps.Registry = sub
 	return deps, nil
 }
 
