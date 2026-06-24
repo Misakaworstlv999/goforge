@@ -85,6 +85,16 @@ func (m *Manager) Subscribe(runID string) (replay []Event, live <-chan Event, ca
 	return replay, live, cancel, nil
 }
 
+// Events returns a one-shot snapshot of the run's events so far (replay only).
+func (m *Manager) Events(runID string) ([]Event, error) {
+	replay, _, cancel, err := m.Subscribe(runID)
+	if err != nil {
+		return nil, err
+	}
+	cancel()
+	return replay, nil
+}
+
 // State returns the run's persisted FSM snapshot (requires the pipeline to have
 // a checkpoint store).
 func (m *Manager) State(ctx context.Context, runID string) (*PipelineState, error) {
