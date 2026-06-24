@@ -133,6 +133,12 @@ func (p *Pipeline) State() *State { return p.deps.State }
 // events as a pull-based iterator. It terminates with a Done event (success), a
 // Paused event (awaiting human approval), or a Failed event paired with an error.
 func (p *Pipeline) Run(ctx context.Context, pipelineID string, input any) iter.Seq2[Event, error] {
+	return p.runControlled(ctx, pipelineID, input, nil)
+}
+
+// runControlled is Run with an optional control channel attached (the Manager
+// uses this for steerable runs). A nil control channel reproduces Run exactly.
+func (p *Pipeline) runControlled(ctx context.Context, pipelineID string, input any, control <-chan Control) iter.Seq2[Event, error] {
 	return func(yield func(Event, error) bool) {
 		if len(p.order) == 0 {
 			yield(failedEvent("", ErrNoStages.Error()), ErrNoStages)
@@ -146,7 +152,7 @@ func (p *Pipeline) Run(ctx context.Context, pipelineID string, input any) iter.S
 			RetryCount:   map[string]int{},
 			StageInput:   input,
 		}
-		p.drive(ctx, st, yield)
+		p.drive(ctx, st, control, yield)
 	}
 }
 
@@ -186,15 +192,20 @@ func (p *Pipeline) Resume(ctx context.Context, pipelineID string, decision Decis
 		} else if !p.bumpRetry(ctx, st, "human rejected", yield) {
 			return
 		}
-		p.drive(ctx, st, yield)
+		p.drive(ctx, st, nil, yield)
 	}
 }
 
 // drive runs the main FSM loop starting by executing st.CurrentStage with
 // st.StageInput. It returns when the pipeline completes, fails, pauses, or the
 // consumer stops iterating.
-func (p *Pipeline) drive(ctx context.Context, st *PipelineState, yield func(Event, error) bool) {
+func (p *Pipeline) drive(ctx context.Context, st *PipelineState, control <-chan Control, yield func(Event, error) bool) {
 	for steps := 0; ; steps++ {
+		// Stage safe point: apply any pending control (pause/resume/steer/
+		// redirect/cancel). No-op when control is nil ⇒ unchanged behavior.
+		if p.applyControl(ctx, st, control, yield) == ctlStop {
+			return
+		}
 		if steps >= p.maxSteps {
 			p.fail(ctx, st, "max steps exceeded", fmt.Errorf("stage %q: %w", st.CurrentStage, ErrMaxStepsExceeded), yield)
 			return

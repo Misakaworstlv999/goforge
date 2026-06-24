@@ -25,6 +25,10 @@ const (
 	EventFailed
 	// EventAgent: a forwarded inner agent.Event (optional progress detail).
 	EventAgent
+	// EventControl: a controller steered the run (steer/redirect) at a safe point.
+	EventControl
+	// EventCanceled: a controller canceled the run (terminal).
+	EventCanceled
 )
 
 func (t EventType) String() string {
@@ -47,6 +51,10 @@ func (t EventType) String() string {
 		return "failed"
 	case EventAgent:
 		return "agent"
+	case EventControl:
+		return "control"
+	case EventCanceled:
+		return "canceled"
 	default:
 		return "unknown"
 	}
@@ -92,4 +100,12 @@ func doneEvent(stage string) Event {
 
 func failedEvent(stage, detail string) Event {
 	return Event{Type: EventFailed, Stage: stage, Detail: detail}
+}
+
+func controlEvent(stage, detail string) Event {
+	return Event{Type: EventControl, Stage: stage, Detail: detail}
+}
+
+func canceledEvent(stage, reason string) Event {
+	return Event{Type: EventCanceled, Stage: stage, Detail: reason}
 }

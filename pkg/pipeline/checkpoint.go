@@ -41,6 +41,9 @@ const (
 	ActionResume    = "resume"
 	ActionComplete  = "complete"
 	ActionFail      = "fail"
+	ActionCancel    = "cancel"
+	ActionRedirect  = "redirect"
+	ActionSteer     = "steer"
 )
 
 // AuditEntry records one pipeline transition for the audit log (M5-005).

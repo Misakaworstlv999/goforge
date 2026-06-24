@@ -173,6 +173,8 @@ const (
 	StatusCompleted
 	// StatusFailed: a stage exhausted its retries or hit an unrecoverable error.
 	StatusFailed
+	// StatusCanceled: a controller canceled the run (see Control / OpCancel).
+	StatusCanceled
 )
 
 func (s Status) String() string {
@@ -185,6 +187,8 @@ func (s Status) String() string {
 		return "completed"
 	case StatusFailed:
 		return "failed"
+	case StatusCanceled:
+		return "canceled"
 	default:
 		return "unknown"
 	}
