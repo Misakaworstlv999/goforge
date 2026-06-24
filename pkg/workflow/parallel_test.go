@@ -28,7 +28,7 @@ func TestOrchestratorWorker_parallelCoding(t *testing.T) {
 		return pipeline.Stage[string, string]{
 			Name: name,
 			Run: func(ctx context.Context, _ string, d pipeline.StageDeps) (string, error) {
-				if _, err := pipeline.RunAgent(ctx, d, "implement "+file, codingSystem, agent.ContextPolicy{}); err != nil {
+				if _, err := pipeline.RunAgent(ctx, d, "implement "+file, codingSystemPrompt(), agent.ContextPolicy{}); err != nil {
 					return "", err
 				}
 				d.State.Set("files", file)

@@ -9,6 +9,7 @@ import (
 	"github.com/Misakaworstlv999/goforge/pkg/agent"
 	"github.com/Misakaworstlv999/goforge/pkg/pipeline"
 	"github.com/Misakaworstlv999/goforge/pkg/tool"
+	"github.com/Misakaworstlv999/goforge/pkg/tool/mcpclient"
 )
 
 // codingTools is the tool subset the coding/testing agents are allowed (per-stage
@@ -67,31 +68,32 @@ func getReview(st *pipeline.State) (reviewVerdict, bool) {
 	return getArtifact[reviewVerdict](st, reviewKey)
 }
 
-const requirementSystem = `You are a requirements analyst. Given a feature request, produce a precise spec.
-CRITICALLY: define the acceptance test points up front — the concrete, verifiable
-criteria that must all pass for the work to be considered done.
-Reply with ONLY a JSON object of this shape (no prose, no Markdown fences):
-{
-  "summary": "<one-line summary>",
-  "scope": ["<affected component>", ...],
-  "acceptance": [
-    {"id": "AP-1", "description": "<verifiable criterion>", "kind": "unit|integration|e2e|manual"},
-    ...
-  ]
+// analysisToolFilter scopes requirement/techdesign agents to a knowledge-base
+// MCP server's tools plus read-only local inspection. KM integration is opt-in:
+// nil (no scoping) when no server is configured ("" or "-").
+func analysisToolFilter(cfg Config) tool.Filter {
+	if cfg.KMMCPServer == "" || cfg.KMMCPServer == "-" {
+		return nil
+	}
+	return tool.Any(
+		mcpclient.ServerToolFilter(cfg.KMMCPServer),
+		tool.Names("read_file", "list_files"),
+	)
 }
-Define at least one acceptance point. Prefer unit/integration/e2e kinds provable by automated tests.`
 
 // NewRequirementStage analyzes a free-text request (the pipeline's entry input)
 // into a Spec whose acceptance points are the up-front contract, seeded onto the
 // blackboard with the merging reducer. Its gate rejects (→ retry) a spec with no
 // acceptance points.
-func NewRequirementStage() pipeline.Stage[string, string] {
+func NewRequirementStage(cfg Config) pipeline.Stage[string, string] {
 	policy := agent.ContextPolicy{Breadth: agent.BreadthWide, Depth: agent.DepthShallow}
+	sys := requirementSystemPrompt(cfg.KMMCPServer)
 	return pipeline.Stage[string, string]{
-		Name:   StageRequirement,
-		Policy: policy,
+		Name:       StageRequirement,
+		ToolFilter: analysisToolFilter(cfg),
+		Policy:     policy,
 		Run: func(ctx context.Context, req string, d pipeline.StageDeps) (string, error) {
-			out, err := pipeline.RunAgent(ctx, d, "Feature request:\n"+req, requirementSystem, policy)
+			out, err := pipeline.RunAgent(ctx, d, "Feature request:\n"+req, sys, policy)
 			if err != nil {
 				return "", err
 			}
@@ -113,20 +115,18 @@ func NewRequirementStage() pipeline.Stage[string, string] {
 	}
 }
 
-const techDesignSystem = `You are a software architect. Given a requirement spec, produce a concise technical design.
-Reply with ONLY a JSON object (no prose, no Markdown fences):
-{"approach":"<how>","files":["<path to create/modify>", ...],"risks":["<risk>", ...]}`
-
 // NewTechDesignStage turns the blackboard Spec into a Design (also stored on the
 // blackboard), carrying the Spec inside it for downstream rendering.
-func NewTechDesignStage() pipeline.Stage[string, string] {
+func NewTechDesignStage(cfg Config) pipeline.Stage[string, string] {
 	policy := agent.ContextPolicy{Breadth: agent.BreadthMedium, Depth: agent.DepthMedium}
+	sys := techDesignSystemPrompt(cfg.KMMCPServer)
 	return pipeline.Stage[string, string]{
-		Name:   StageTechDesign,
-		Policy: policy,
+		Name:       StageTechDesign,
+		ToolFilter: analysisToolFilter(cfg),
+		Policy:     policy,
 		Run: func(ctx context.Context, _ string, d pipeline.StageDeps) (string, error) {
 			spec, _ := getSpec(d.State)
-			out, err := pipeline.RunAgent(ctx, d, "Requirement spec:\n"+renderSpec(spec), techDesignSystem, policy)
+			out, err := pipeline.RunAgent(ctx, d, "Requirement spec:\n"+renderSpec(spec), sys, policy)
 			if err != nil {
 				return "", err
 			}
@@ -147,15 +147,10 @@ func NewTechDesignStage() pipeline.Stage[string, string] {
 	}
 }
 
-const codingSystem = `You are a software engineer. Implement the technical design.
-Use write_file to create each file within the workdir; you may read_file/list_files and
-run allowlisted commands via exec_command. When finished, reply with ONLY a JSON object:
-{"files":["<path you wrote>", ...],"summary":"<what you implemented>"}`
-
 // NewCodingStage implements the blackboard Design into real files using the
 // sandboxed file/shell tools (scoped via Stage.Tools). It is the rework hub:
 // review and every test layer route back here on failure.
-func NewCodingStage() pipeline.Stage[string, string] {
+func NewCodingStage(_ Config) pipeline.Stage[string, string] {
 	policy := agent.ContextPolicy{Breadth: agent.BreadthNarrow, Depth: agent.DepthDeep}
 	return pipeline.Stage[string, string]{
 		Name:   StageCoding,
@@ -163,7 +158,7 @@ func NewCodingStage() pipeline.Stage[string, string] {
 		Policy: policy,
 		Run: func(ctx context.Context, _ string, d pipeline.StageDeps) (string, error) {
 			design, _ := getDesign(d.State)
-			out, err := pipeline.RunAgent(ctx, d, "Implement this design, then report.\n"+renderDesign(design), codingSystem, policy)
+			out, err := pipeline.RunAgent(ctx, d, "Implement this design, then report.\n"+renderDesign(design), codingSystemPrompt(), policy)
 			if err != nil {
 				return "", err
 			}

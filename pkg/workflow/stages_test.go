@@ -18,7 +18,7 @@ func TestRequirementStage(t *testing.T) {
 		]
 	}`
 	deps := pipeline.StageDeps{LLM: &jsonLLM{reply: specJSON}, State: pipeline.NewState()}
-	st := NewRequirementStage()
+	st := NewRequirementStage(Config{KMMCPServer: "-"})
 	ctx := context.Background()
 
 	if _, err := st.Run(ctx, "Add an Add(a,b int) int function", deps); err != nil {
@@ -43,7 +43,7 @@ func TestRequirementStage(t *testing.T) {
 
 	// Gate fails (→ retry) when the spec has no acceptance points.
 	empty := pipeline.StageDeps{LLM: &jsonLLM{reply: `{"summary":"x","acceptance":[]}`}, State: pipeline.NewState()}
-	stEmpty := NewRequirementStage()
+	stEmpty := NewRequirementStage(Config{KMMCPServer: "-"})
 	_, _ = stEmpty.Run(ctx, "x", empty)
 	if r, _ := stEmpty.Gate(ctx, "", empty); r.Status != pipeline.GateFail {
 		t.Error("gate should fail when no acceptance points")
@@ -57,7 +57,7 @@ func TestTechDesignStage(t *testing.T) {
 	}
 	// Seed the spec the design stage reads from the blackboard.
 	deps.State.Set(specKey, Spec{Summary: "add", Acceptance: []AcceptancePoint{{ID: "AP-1", Kind: KindUnit}}})
-	st := NewTechDesignStage()
+	st := NewTechDesignStage(Config{KMMCPServer: "-"})
 	ctx := context.Background()
 
 	if _, err := st.Run(ctx, "", deps); err != nil {
@@ -82,7 +82,7 @@ func TestCodingStage_scopedToolsAndBlackboard(t *testing.T) {
 		State: pipeline.NewState(),
 	}
 	deps.State.Set(designKey, Design{Approach: "x", Files: []string{"math.go"}})
-	st := NewCodingStage()
+	st := NewCodingStage(Config{})
 
 	if got := strings.Join(st.Tools, ","); got != "read_file,write_file,list_files,exec_command" {
 		t.Errorf("coding tool scope = %q", got)
@@ -130,5 +130,22 @@ func TestReviewStage_verdictDrivesRoute(t *testing.T) {
 		if tl == "write_file" || tl == "exec_command" {
 			t.Errorf("reviewer must not have %q", tl)
 		}
+	}
+}
+
+func TestAnalysisStages_kmToolFilter(t *testing.T) {
+	// KM integration is opt-in: no server configured ⇒ no ToolFilter.
+	if NewRequirementStage(Config{}).ToolFilter != nil {
+		t.Error("empty config must not set a KM ToolFilter (opt-in)")
+	}
+	if NewRequirementStage(Config{KMMCPServer: "-"}).ToolFilter != nil {
+		t.Error("explicit '-' must disable the KM ToolFilter")
+	}
+	// Configuring a server enables the bulk KM tool filter on both analysis stages.
+	if NewRequirementStage(Config{KMMCPServer: "docs"}).ToolFilter == nil {
+		t.Error("a configured KM server must enable the ToolFilter")
+	}
+	if NewTechDesignStage(Config{KMMCPServer: "docs"}).ToolFilter == nil {
+		t.Error("a configured KM server must enable the ToolFilter on techdesign")
 	}
 }

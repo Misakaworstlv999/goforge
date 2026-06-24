@@ -10,11 +10,19 @@ import (
 // matching progressive test layer (via the sandboxed exec_command tool); zero
 // values default to `go test ./... -count=1`. MaxSteps bounds the total stage
 // executions across rework cycles (default 60).
+//
+// KMMCPServer names the mcpServers key for a knowledge-base MCP server whose
+// tools are scoped onto the requirement/techdesign stages (so those agents can
+// research docs before speccing). It is OPT-IN: empty (or "-") disables KM tool
+// scoping. When set, the shared Registry must register that server's tools (see
+// internal/cli registerMCPServers); the value is supplied by the deployment's
+// own config, never hardcoded here.
 type Config struct {
 	UnitTest        TestCommand
 	IntegrationTest TestCommand
 	E2ETest         TestCommand
 	MaxSteps        int
+	KMMCPServer     string
 }
 
 func (c Config) withDefaults() Config {
@@ -31,6 +39,8 @@ func (c Config) withDefaults() Config {
 	if c.MaxSteps <= 0 {
 		c.MaxSteps = 60
 	}
+	// KMMCPServer is intentionally not defaulted: KM integration is opt-in and
+	// its server name comes from the deployment's config, not committed code.
 	return c
 }
 
@@ -48,9 +58,9 @@ func BuildDevWorkflow(deps pipeline.StageDeps, cfg Config, opts ...pipeline.Opti
 	p := pipeline.New(deps, append([]pipeline.Option{pipeline.WithMaxSteps(cfg.MaxSteps)}, opts...)...)
 
 	// Nodes (registration order defines the default forward path).
-	_ = pipeline.AddStage(p, NewRequirementStage())
-	_ = pipeline.AddStage(p, NewTechDesignStage())
-	_ = pipeline.AddStage(p, NewCodingStage())
+	_ = pipeline.AddStage(p, NewRequirementStage(cfg))
+	_ = pipeline.AddStage(p, NewTechDesignStage(cfg))
+	_ = pipeline.AddStage(p, NewCodingStage(cfg))
 	_ = pipeline.AddStage(p, NewReviewStage())
 	_ = pipeline.AddStage(p, NewTestStage(KindUnit, cfg.UnitTest))
 	_ = pipeline.AddStage(p, NewTestStage(KindIntegration, cfg.IntegrationTest))
