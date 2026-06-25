@@ -421,7 +421,7 @@
     {
       "id": "M7",
       "name": "Production Ready",
-      "goal": "HTTP API, CLI, observability, and documentation",
+      "goal": "HTTP API, CLI, observability, and documentation — REFRAMED around a Steerable Run Control Plane (see docs/WORKFLOW_CONTROL_RESEARCH.md): a run is a durable, addressable, observable, steerable resource driven identically by humans and agents.",
       "ai_skills": "MCP protocol, Webhook integration",
       "go_skills": "net/http, OpenTelemetry, zap, cobra",
       "features": [
@@ -432,8 +432,8 @@
           "dependencies": [
             "M5-004"
           ],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/server/http.go: stdlib net/http over pipeline.Manager — POST /v1/runs (trigger), GET /v1/runs, GET /v1/runs/{id} (state), GET /v1/runs/{id}/events (SSE replay+live), POST /v1/runs/{id}/control (pause/resume/steer/redirect/cancel), GET /healthz. Backed by the P1 control plane (pkg/pipeline/{control,hub,manager}.go): cooperative control signal at stage AND agent-step safe points (zero-value=unchanged), event hub (multi-subscriber+replay), Manager (addressable background runs). Control also exposed as a builtin tool set (controltools.go) so an agent steers runs via function calls. -race tested."
         },
         {
           "id": "M7-002",
@@ -475,7 +475,7 @@
             "M7-001"
           ],
           "status": "not-started",
-          "evidence": ""
+          "evidence": "Deprioritized further: control is internalized as a builtin tool set (ControlTools) so in-process agents steer runs directly — no external MCP server needed unless an external integration (Cursor etc.) requires it."
         },
         {
           "id": "M7-006",
