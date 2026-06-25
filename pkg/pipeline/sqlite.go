@@ -64,7 +64,16 @@ CREATE TABLE IF NOT EXISTS audit (
 	action      TEXT NOT NULL,
 	detail      TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_audit_pipeline ON audit(pipeline_id, id);`
+CREATE INDEX IF NOT EXISTS idx_audit_pipeline ON audit(pipeline_id, id);
+CREATE TABLE IF NOT EXISTS checkpoint_steps (
+	pipeline_id TEXT NOT NULL,
+	seq         INTEGER NOT NULL,
+	stage       TEXT NOT NULL,
+	status      INTEGER NOT NULL,
+	state       BLOB NOT NULL,
+	updated_at  INTEGER NOT NULL,
+	PRIMARY KEY (pipeline_id, seq)
+);`
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("migrating sqlite schema: %w", err)
 	}
@@ -87,6 +96,60 @@ func (s *SQLiteStore) Save(ctx context.Context, st *PipelineState) error {
 		return fmt.Errorf("saving checkpoint: %w", err)
 	}
 	return nil
+}
+
+func (s *SQLiteStore) SaveStep(ctx context.Context, st *PipelineState) error {
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(st); err != nil {
+		return fmt.Errorf("encoding checkpoint step: %w", err)
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO checkpoint_steps (pipeline_id, seq, stage, status, state, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(pipeline_id, seq) DO UPDATE SET
+		   stage=excluded.stage, status=excluded.status, state=excluded.state, updated_at=excluded.updated_at`,
+		st.PipelineID, st.Seq, st.CurrentStage, int(st.Status), buf.Bytes(), st.UpdatedAt.UnixNano())
+	if err != nil {
+		return fmt.Errorf("saving checkpoint step: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) LoadAt(ctx context.Context, pipelineID string, seq int) (*PipelineState, error) {
+	var blob []byte
+	err := s.db.QueryRowContext(ctx, `SELECT state FROM checkpoint_steps WHERE pipeline_id=? AND seq=?`, pipelineID, seq).Scan(&blob)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("loading checkpoint step: %w", err)
+	}
+	var st PipelineState
+	if err := gob.NewDecoder(bytes.NewReader(blob)).Decode(&st); err != nil {
+		return nil, fmt.Errorf("decoding checkpoint step: %w", err)
+	}
+	return &st, nil
+}
+
+func (s *SQLiteStore) ListCheckpoints(ctx context.Context, pipelineID string) ([]CheckpointInfo, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT seq, stage, status, updated_at FROM checkpoint_steps WHERE pipeline_id=? ORDER BY seq`, pipelineID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CheckpointInfo
+	for rows.Next() {
+		var ci CheckpointInfo
+		var status int
+		var ts int64
+		if err := rows.Scan(&ci.Seq, &ci.Stage, &status, &ts); err != nil {
+			return nil, err
+		}
+		ci.Status = Status(status)
+		ci.UpdatedAt = time.Unix(0, ts)
+		out = append(out, ci)
+	}
+	return out, rows.Err()
 }
 
 func (s *SQLiteStore) Load(ctx context.Context, pipelineID string) (*PipelineState, error) {

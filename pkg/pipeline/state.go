@@ -219,4 +219,8 @@ type PipelineState struct {
 	StageInput   any
 	StageOutput  any
 	UpdatedAt    time.Time
+	// Seq is a monotonic transition counter for checkpoint lineage (P3): every
+	// persisted transition gets the next Seq, so a run can be rewound to / forked
+	// from any earlier checkpoint (time-travel) via CheckpointStore.LoadAt.
+	Seq int
 }

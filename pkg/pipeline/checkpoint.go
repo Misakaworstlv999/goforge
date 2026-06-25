@@ -83,6 +83,23 @@ type CheckpointStore interface {
 	Audit(ctx context.Context, entry AuditEntry) error
 	// AuditLog returns the audit entries for a pipeline in insertion order.
 	AuditLog(ctx context.Context, pipelineID string) ([]AuditEntry, error)
+
+	// SaveStep appends a checkpoint to the run's lineage (keyed by st.Seq),
+	// retaining every transition so a run can be rewound/forked from any point —
+	// distinct from Save, which only tracks the latest snapshot.
+	SaveStep(ctx context.Context, st *PipelineState) error
+	// LoadAt returns the lineage checkpoint at seq, or ErrNotFound.
+	LoadAt(ctx context.Context, pipelineID string, seq int) (*PipelineState, error)
+	// ListCheckpoints summarizes a run's lineage in seq order.
+	ListCheckpoints(ctx context.Context, pipelineID string) ([]CheckpointInfo, error)
+}
+
+// CheckpointInfo summarizes one lineage checkpoint (for time-travel UIs/tools).
+type CheckpointInfo struct {
+	Seq       int
+	Stage     string
+	Status    Status
+	UpdatedAt time.Time
 }
 
 // gobClone serializes and reloads a PipelineState. It both decouples the stored
@@ -106,6 +123,7 @@ type MemoryStore struct {
 	states  map[string]*PipelineState
 	history map[string][]llm.Message
 	audit   map[string][]AuditEntry
+	steps   map[string][]*PipelineState // lineage, append-only per run
 }
 
 // NewMemoryStore returns an empty in-memory store.
@@ -114,6 +132,7 @@ func NewMemoryStore() *MemoryStore {
 		states:  make(map[string]*PipelineState),
 		history: make(map[string][]llm.Message),
 		audit:   make(map[string][]AuditEntry),
+		steps:   make(map[string][]*PipelineState),
 	}
 }
 
@@ -172,6 +191,39 @@ func (m *MemoryStore) History(_ context.Context, pipelineID string) ([]llm.Messa
 	defer m.mu.RUnlock()
 	out := make([]llm.Message, len(m.history[pipelineID]))
 	copy(out, m.history[pipelineID])
+	return out, nil
+}
+
+func (m *MemoryStore) SaveStep(_ context.Context, st *PipelineState) error {
+	clone, err := gobClone(st)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.steps[st.PipelineID] = append(m.steps[st.PipelineID], clone)
+	return nil
+}
+
+func (m *MemoryStore) LoadAt(_ context.Context, pipelineID string, seq int) (*PipelineState, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, st := range m.steps[pipelineID] {
+		if st.Seq == seq {
+			return gobClone(st)
+		}
+	}
+	return nil, ErrNotFound
+}
+
+func (m *MemoryStore) ListCheckpoints(_ context.Context, pipelineID string) ([]CheckpointInfo, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	steps := m.steps[pipelineID]
+	out := make([]CheckpointInfo, 0, len(steps))
+	for _, st := range steps {
+		out = append(out, CheckpointInfo{Seq: st.Seq, Stage: st.CurrentStage, Status: st.Status, UpdatedAt: st.UpdatedAt})
+	}
 	return out, nil
 }
 

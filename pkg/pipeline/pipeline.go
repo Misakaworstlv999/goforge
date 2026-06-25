@@ -363,7 +363,14 @@ func (p *Pipeline) save(ctx context.Context, st *PipelineState) error {
 	}
 	st.UpdatedAt = time.Now()
 	st.Blackboard = p.deps.State.Snapshot()
-	return p.store.Save(ctx, st)
+	st.Seq++ // monotonic per transition → checkpoint lineage
+	if err := p.store.Save(ctx, st); err != nil {
+		return err
+	}
+	// Append to the lineage (best-effort: a lineage write failure must not abort
+	// the run; the latest snapshot in Save is the correctness-critical one).
+	_ = p.store.SaveStep(ctx, st)
+	return nil
 }
 
 // audit appends an audit entry (best-effort; no-op without a store).
