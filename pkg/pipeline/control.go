@@ -1,6 +1,87 @@
 package pipeline
 
-import "context"
+import (
+	"context"
+	"fmt"
+
+	"github.com/Misakaworstlv999/goforge/pkg/agent"
+	"github.com/Misakaworstlv999/goforge/pkg/llm"
+)
+
+// controlAbort is the error an in-agent interrupt returns to abort a stage's
+// agent for a control op that the agent itself can't apply (cancel ⇒ end the
+// run; redirect ⇒ route elsewhere). drive recognizes it via errors.As and
+// finalizes accordingly instead of treating it as a stage failure.
+type controlAbort struct {
+	op    ControlOp
+	stage string
+	note  string
+}
+
+func (e *controlAbort) Error() string {
+	return fmt.Sprintf("pipeline: control abort op=%d stage=%q", e.op, e.stage)
+}
+
+// agentInterrupt adapts the run's control channel into an agent.Interrupt so
+// control applies at each ReAct STEP boundary (fine-grained), not just between
+// stages. Pause blocks; steer injects a message (and persists to the blackboard);
+// cancel/redirect return a *controlAbort for drive to finalize. nil control ⇒
+// nil interrupt (agent runs uninstrumented). Safe: drive is blocked inside the
+// stage while the agent runs, so this is the channel's only reader meanwhile.
+func (p *Pipeline) agentInterrupt(control <-chan Control) agent.Interrupt {
+	if control == nil {
+		return nil
+	}
+	return func(ctx context.Context, _ int) ([]llm.Message, error) {
+		var inject []llm.Message
+		for {
+			select {
+			case <-ctx.Done():
+				return nil, &controlAbort{op: OpCancel, note: ctx.Err().Error()}
+			case c := <-control:
+				switch c.Op {
+				case OpCancel:
+					return nil, &controlAbort{op: OpCancel, note: c.Note}
+				case OpRedirect:
+					return nil, &controlAbort{op: OpRedirect, stage: c.Stage, note: c.Note}
+				case OpSteer:
+					p.deps.State.SetReducer(SteerKey, AppendReducer)
+					p.deps.State.Set(SteerKey, c.Note)
+					inject = append(inject, llm.UserMessage("[steer] "+c.Note))
+				case OpPause:
+					if ab := p.agentWaitResume(ctx, control); ab != nil {
+						return nil, ab
+					}
+				}
+			default:
+				return inject, nil
+			}
+		}
+	}
+}
+
+// agentWaitResume blocks a paused agent until OpResume (returns nil), OpCancel/
+// OpRedirect (returns *controlAbort), or ctx cancellation.
+func (p *Pipeline) agentWaitResume(ctx context.Context, control <-chan Control) *controlAbort {
+	for {
+		select {
+		case <-ctx.Done():
+			return &controlAbort{op: OpCancel, note: ctx.Err().Error()}
+		case c := <-control:
+			switch c.Op {
+			case OpResume:
+				return nil
+			case OpCancel:
+				return &controlAbort{op: OpCancel, note: c.Note}
+			case OpRedirect:
+				return &controlAbort{op: OpRedirect, stage: c.Stage, note: c.Note}
+			case OpSteer:
+				p.deps.State.SetReducer(SteerKey, AppendReducer)
+				p.deps.State.Set(SteerKey, c.Note)
+			}
+		}
+	}
+}
 
 // SteerKey is the shared-blackboard key under which OpSteer notes accumulate
 // (with AppendReducer). A stage that wants to honor live guidance reads it via a

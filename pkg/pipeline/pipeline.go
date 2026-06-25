@@ -221,6 +221,9 @@ func (p *Pipeline) drive(ctx context.Context, st *PipelineState, control <-chan 
 			p.fail(ctx, st, err.Error(), fmt.Errorf("stage %q: %w", st.CurrentStage, err), yield)
 			return
 		}
+		// Give agent-driven stages a step-granular control seam over the same
+		// channel (drive is blocked here while the stage runs, so single reader).
+		deps.Interrupt = p.agentInterrupt(control)
 
 		p.audit(ctx, st, ActionEnter, "")
 		if !yield(stageEnterEvent(st.CurrentStage), nil) {
@@ -229,6 +232,23 @@ func (p *Pipeline) drive(ctx context.Context, st *PipelineState, control <-chan 
 
 		out, err := n.run(ctx, st.StageInput, deps)
 		if err != nil {
+			var ab *controlAbort
+			if errors.As(err, &ab) {
+				if ab.op == OpCancel {
+					p.doCancel(ctx, st, ab.note, yield)
+					return
+				}
+				// OpRedirect: route elsewhere and re-loop (no stage failure).
+				if ab.stage != "" {
+					st.CurrentStage = ab.stage
+					st.StageInput = st.StageOutput
+				}
+				p.audit(ctx, st, ActionRedirect, ab.stage)
+				if !yield(controlEvent(st.CurrentStage, "redirect (mid-agent): "+ab.stage+" "+ab.note), nil) {
+					return
+				}
+				continue
+			}
 			p.fail(ctx, st, err.Error(), fmt.Errorf("stage %q: %w", st.CurrentStage, err), yield)
 			return
 		}

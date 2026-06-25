@@ -36,7 +36,17 @@ type SimpleAgent struct {
 	toolTimeout time.Duration
 	policy      ContextPolicy
 	transcript  func(llm.Message)
+	interrupt   Interrupt
 }
+
+// Interrupt is a cooperative control seam called at each ReAct step boundary (a
+// safe point, before every model call). It lets an outer controller pause (by
+// blocking), steer (by returning messages to inject into the conversation), or
+// abort the run (by returning a non-nil error) at step granularity rather than
+// only between pipeline stages. nil ⇒ no checks (default behavior unchanged).
+// The agent is Ring 3 and knows nothing of Ring 4: the pipeline supplies an
+// adapter over its run-control channel (see pipeline.RunAgent).
+type Interrupt func(ctx context.Context, step int) (inject []llm.Message, err error)
 
 // Option configures a SimpleAgent.
 type Option func(*SimpleAgent)
@@ -73,6 +83,12 @@ func WithToolTimeout(d time.Duration) Option {
 // compacted projection is never sent to the sink). nil ⇒ no transcript capture.
 func WithTranscriptSink(sink func(llm.Message)) Option {
 	return func(a *SimpleAgent) { a.transcript = sink }
+}
+
+// WithInterrupt installs a cooperative control seam checked at each ReAct step
+// boundary (pause/steer/abort). nil ⇒ no checks.
+func WithInterrupt(i Interrupt) Option {
+	return func(a *SimpleAgent) { a.interrupt = i }
 }
 
 // WithContextPolicy enables context engineering: source injection before the
@@ -154,6 +170,19 @@ func (a *SimpleAgent) Run(ctx context.Context, task string) iter.Seq2[Event, err
 		lastUsage := 0 // provider-reported token count from the latest Chat
 
 		for step := 0; step < a.maxSteps; step++ {
+			// Cooperative safe point: let an outer controller pause/steer/abort
+			// between reasoning steps (much finer-grained than per-stage).
+			if a.interrupt != nil {
+				inject, err := a.interrupt(ctx, step)
+				if err != nil {
+					yield(ErrorEvent(err, step), err)
+					return
+				}
+				for _, m := range inject {
+					record(m)
+				}
+			}
+
 			resp, err := a.llm.Chat(ctx, messages, chatOpts...)
 			if err != nil {
 				yield(ErrorEvent(err, step), err)
