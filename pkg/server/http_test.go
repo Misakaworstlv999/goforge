@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -82,7 +83,55 @@ func TestServer_controlCancel(t *testing.T) {
 	}
 }
 
+func TestServer_checkpointsRewindFork(t *testing.T) {
+	mgr, _ := fixture(t, nil)
+	srv := httptest.NewServer(New(mgr).Handler())
+	defer srv.Close()
+
+	post(t, srv.URL+"/v1/runs", `{"run_id":"tt","input":"hello"}`)
+	mgr.Wait("tt")
+
+	// lineage is observable
+	if cps := get(t, srv.URL+"/v1/runs/tt/checkpoints"); !strings.Contains(cps, `"seq"`) {
+		t.Errorf("checkpoints = %q, want a seq-bearing lineage", cps)
+	}
+
+	// rewind same id (time-travel) → 204
+	postExpect(t, srv.URL+"/v1/runs/tt/control", `{"op":"rewind","seq":1,"note":"redo"}`, http.StatusNoContent)
+	mgr.Wait("tt")
+
+	// fork → 201 + new run id, which completes independently
+	newID := postJSON(t, srv.URL+"/v1/runs/tt/control", `{"op":"fork","seq":1}`, http.StatusCreated)
+	if newID == "" {
+		t.Fatal("fork returned no run_id")
+	}
+	mgr.Wait(newID)
+	if st := get(t, srv.URL+"/v1/runs/"+newID); !strings.Contains(st, `"status":"completed"`) {
+		t.Errorf("forked run state = %q, want completed", st)
+	}
+}
+
 // --- helpers ---
+
+// postJSON posts body, asserts status, and returns the "run_id" field of the
+// JSON response (if any).
+func postJSON(t *testing.T, url, body string, wantStatus int) string {
+	t.Helper()
+	resp, err := http.Post(url, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != wantStatus {
+		t.Fatalf("POST %s: status %d, want %d (%s)", url, resp.StatusCode, wantStatus, b)
+	}
+	var out struct {
+		RunID string `json:"run_id"`
+	}
+	_ = json.Unmarshal(b, &out)
+	return out.RunID
+}
 
 func get(t *testing.T, url string) string {
 	t.Helper()

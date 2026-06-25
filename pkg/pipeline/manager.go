@@ -144,6 +144,19 @@ func (m *Manager) Cancel(runID, reason string) error {
 	return m.signal(runID, Control{Op: OpCancel, Note: reason})
 }
 
+// Checkpoints returns the run's checkpoint lineage (seq-ordered), the addressable
+// points rewind/fork can target. Requires a store with lineage.
+func (m *Manager) Checkpoints(ctx context.Context, runID string) ([]CheckpointInfo, error) {
+	h, err := m.handle(runID)
+	if err != nil {
+		return nil, err
+	}
+	if h.pipeline.store == nil {
+		return nil, fmt.Errorf("pipeline: run %q has no store (lineage unavailable)", runID)
+	}
+	return h.pipeline.store.ListCheckpoints(ctx, runID)
+}
+
 // Rewind re-runs runID from an earlier checkpoint (time-travel): same id, a fresh
 // run driven from the state at seq, with optional guidance injected. Requires a
 // store with lineage (SaveStep).

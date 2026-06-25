@@ -30,6 +30,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/runs", s.list)
 	mux.HandleFunc("GET /v1/runs/{id}", s.state)
 	mux.HandleFunc("GET /v1/runs/{id}/events", s.events)
+	mux.HandleFunc("GET /v1/runs/{id}/checkpoints", s.checkpoints)
 	mux.HandleFunc("POST /v1/runs/{id}/control", s.control)
 	return mux
 }
@@ -109,6 +110,25 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// checkpoints returns the run's checkpoint lineage — the seqs rewind/fork target.
+func (s *Server) checkpoints(w http.ResponseWriter, r *http.Request) {
+	cps, err := s.mgr.Checkpoints(r.Context(), r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	out := make([]map[string]any, 0, len(cps))
+	for _, c := range cps {
+		out = append(out, map[string]any{
+			"seq":        c.Seq,
+			"stage":      c.Stage,
+			"status":     c.Status.String(),
+			"updated_at": c.UpdatedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"checkpoints": out})
+}
+
 func (s *Server) control(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req struct {
@@ -116,6 +136,7 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request) {
 		Stage  string `json:"stage"`
 		Note   string `json:"note"`
 		Reason string `json:"reason"`
+		Seq    int    `json:"seq"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
@@ -133,6 +154,14 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request) {
 		err = s.mgr.Redirect(id, req.Stage, req.Note)
 	case "cancel":
 		err = s.mgr.Cancel(id, req.Reason)
+	case "rewind":
+		err = s.mgr.Rewind(id, req.Seq, req.Note)
+	case "fork":
+		var newID string
+		if newID, err = s.mgr.Fork(id, "", req.Seq); err == nil {
+			writeJSON(w, http.StatusCreated, map[string]string{"run_id": newID})
+			return
+		}
 	default:
 		http.Error(w, "unknown control op: "+req.Op, http.StatusBadRequest)
 		return

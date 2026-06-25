@@ -103,6 +103,41 @@ func ControlTools(m *Manager) []tool.Tool {
 			}) (string, error) {
 				return ack("canceled", a.RunID, m.Cancel(a.RunID, a.Reason))
 			}),
+
+		tool.NewTool("list_checkpoints", "List a run's checkpoint lineage (seq, stage, status) — the points rewind/fork can target.",
+			func(ctx context.Context, a runID) (string, error) {
+				cps, err := m.Checkpoints(ctx, a.RunID)
+				if err != nil {
+					return "", err
+				}
+				if len(cps) == 0 {
+					return "(no checkpoints)", nil
+				}
+				var b strings.Builder
+				for _, c := range cps {
+					fmt.Fprintf(&b, "seq=%d stage=%s status=%s\n", c.Seq, c.Stage, c.Status.String())
+				}
+				return b.String(), nil
+			}),
+		tool.NewTool("rewind_run", "Re-run a run from an earlier checkpoint (time-travel, same id), optionally injecting guidance. Use list_checkpoints to pick a seq.",
+			func(_ context.Context, a struct {
+				RunID string `json:"run_id" jsonschema:"description=The run id,required"`
+				Seq   int    `json:"seq" jsonschema:"description=Checkpoint seq to rewind to,required"`
+				Note  string `json:"note" jsonschema:"description=Optional guidance to inject"`
+			}) (string, error) {
+				return ack(fmt.Sprintf("rewound to seq %d", a.Seq), a.RunID, m.Rewind(a.RunID, a.Seq, a.Note))
+			}),
+		tool.NewTool("fork_run", "Start an independent new run continuing from an earlier checkpoint of a run; returns the new run id.",
+			func(_ context.Context, a struct {
+				RunID string `json:"run_id" jsonschema:"description=The source run id,required"`
+				Seq   int    `json:"seq" jsonschema:"description=Checkpoint seq to fork from,required"`
+			}) (string, error) {
+				newID, err := m.Fork(a.RunID, "", a.Seq)
+				if err != nil {
+					return "", err
+				}
+				return "forked run " + a.RunID + " → " + newID, nil
+			}),
 	}
 }
 

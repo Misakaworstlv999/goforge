@@ -42,6 +42,50 @@ func TestControlTools_triggerObserve(t *testing.T) {
 	}
 }
 
+func TestControlTools_checkpointsRewindFork(t *testing.T) {
+	var mu sync.Mutex
+	var rec []string
+	mgr, _ := managerFixture(t, nil, &rec, &mu) // runs to completion
+
+	byName := map[string]tool.Tool{}
+	for _, tl := range ControlTools(mgr) {
+		byName[tl.Name()] = tl
+	}
+	ctx := context.Background()
+
+	id, _ := mgr.Trigger("tt", "x")
+	mgr.Wait(id)
+
+	cps, err := byName["list_checkpoints"].Execute(ctx, []byte(`{"run_id":"tt"}`))
+	if err != nil || !strings.Contains(cps, "seq=") {
+		t.Fatalf("list_checkpoints = %q (err %v)", cps, err)
+	}
+
+	mu.Lock()
+	before := len(rec)
+	mu.Unlock()
+	if _, err := byName["rewind_run"].Execute(ctx, []byte(`{"run_id":"tt","seq":1,"note":"redo"}`)); err != nil {
+		t.Fatal(err)
+	}
+	mgr.Wait("tt")
+	mu.Lock()
+	after := len(rec)
+	mu.Unlock()
+	if after <= before {
+		t.Errorf("rewind should re-execute stages: before=%d after=%d", before, after)
+	}
+
+	out, err := byName["fork_run"].Execute(ctx, []byte(`{"run_id":"tt","seq":1}`))
+	if err != nil || !strings.Contains(out, "→ ") {
+		t.Fatalf("fork_run = %q (err %v)", out, err)
+	}
+	newID := out[strings.LastIndex(out, "→ ")+len("→ "):]
+	mgr.Wait(newID)
+	if st, err := mgr.State(ctx, newID); err != nil || st.Status != StatusCompleted {
+		t.Errorf("forked run %q state = %v (err %v), want completed", newID, st.Status, err)
+	}
+}
+
 func TestControlTools_steerAndCancel(t *testing.T) {
 	gate := make(chan struct{})
 	var mu sync.Mutex
