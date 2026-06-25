@@ -65,13 +65,32 @@ type PipelineInfo struct {
 
 // CheckpointStore persists pipeline state, the durable (lossless) conversation
 // log, and the audit trail. MemoryStore and SQLiteStore both satisfy it.
+//
+// Run state is kept in two deliberately distinct shapes, the way an event-
+// sourced system keeps a current-state projection alongside its event log:
+//
+//   - Save/Load/List — the canonical CURRENT-STATE projection: exactly one
+//     mutable row per run ("where is this run now"). It is the hot path for
+//     Resume/State/List (O(1) point reads) and can be retained independently of
+//     the lineage, so the lineage may later be pruned/GC'd without ever orphaning
+//     a run's current state.
+//   - SaveStep/LoadAt/ListCheckpoints — the append-only LINEAGE: one row per
+//     transition keyed by Seq ("how this run got here"), the substrate for
+//     rewind/fork/time-travel.
+//
+// The projection is derivable from the lineage (latest == max Seq), so the split
+// is an intentional projection-plus-log design, not accidental duplication —
+// keep both unless you are prepared to give up cheap current-state reads and
+// independent lineage retention.
 type CheckpointStore interface {
-	// Save persists a snapshot of the pipeline state (overwriting any prior one
-	// for the same PipelineID).
+	// Save persists the run's current-state projection, overwriting any prior
+	// snapshot for the same PipelineID (one mutable row per run). This is the
+	// hot-path pointer Resume/State/List read; it is NOT the time-travel history
+	// (see SaveStep for that).
 	Save(ctx context.Context, st *PipelineState) error
-	// Load returns the persisted state, or ErrNotFound.
+	// Load returns the current-state projection, or ErrNotFound.
 	Load(ctx context.Context, pipelineID string) (*PipelineState, error)
-	// List summarizes all persisted pipelines.
+	// List summarizes the current-state projection of all persisted pipelines.
 	List(ctx context.Context) ([]PipelineInfo, error)
 	// AppendHistory appends messages to the durable conversation log as they are
 	// produced (append-on-produce), keeping the lossless full transcript behind
@@ -84,9 +103,11 @@ type CheckpointStore interface {
 	// AuditLog returns the audit entries for a pipeline in insertion order.
 	AuditLog(ctx context.Context, pipelineID string) ([]AuditEntry, error)
 
-	// SaveStep appends a checkpoint to the run's lineage (keyed by st.Seq),
-	// retaining every transition so a run can be rewound/forked from any point —
-	// distinct from Save, which only tracks the latest snapshot.
+	// SaveStep appends a checkpoint to the run's append-only lineage (keyed by
+	// st.Seq), retaining every transition so a run can be rewound/forked from any
+	// point. Distinct from Save: this is the immutable history, Save is the
+	// mutable current-state pointer. The latest lineage row (max Seq) equals the
+	// Save projection — the redundancy is deliberate (see the interface doc).
 	SaveStep(ctx context.Context, st *PipelineState) error
 	// LoadAt returns the lineage checkpoint at seq, or ErrNotFound.
 	LoadAt(ctx context.Context, pipelineID string, seq int) (*PipelineState, error)

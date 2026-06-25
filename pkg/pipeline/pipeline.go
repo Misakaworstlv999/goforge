@@ -372,18 +372,23 @@ func (p *Pipeline) defaultNext(stage string) Route {
 }
 
 // save snapshots the blackboard into st and persists it (no-op without a store).
+// It writes both shapes of the store (see CheckpointStore doc): the canonical
+// current-state projection via Save, and an append-only lineage row via SaveStep.
 func (p *Pipeline) save(ctx context.Context, st *PipelineState) error {
 	if p.store == nil {
 		return nil
 	}
 	st.UpdatedAt = time.Now()
 	st.Blackboard = p.deps.State.Snapshot()
-	st.Seq++ // monotonic per transition → checkpoint lineage
+	st.Seq++ // monotonic per transition → this row's lineage key
+	// Save is the correctness-critical write (the current-state pointer Resume
+	// reads); it must succeed.
 	if err := p.store.Save(ctx, st); err != nil {
 		return err
 	}
-	// Append to the lineage (best-effort: a lineage write failure must not abort
-	// the run; the latest snapshot in Save is the correctness-critical one).
+	// SaveStep records the same snapshot in the lineage for rewind/fork. Best-
+	// effort: a lineage write failure must not abort the run — at worst this Seq
+	// is not addressable for time-travel; the current state stays consistent.
 	_ = p.store.SaveStep(ctx, st)
 	return nil
 }
