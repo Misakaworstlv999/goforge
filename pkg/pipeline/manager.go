@@ -144,6 +144,69 @@ func (m *Manager) Cancel(runID, reason string) error {
 	return m.signal(runID, Control{Op: OpCancel, Note: reason})
 }
 
+// Rewind re-runs runID from an earlier checkpoint (time-travel): same id, a fresh
+// run driven from the state at seq, with optional guidance injected. Requires a
+// store with lineage (SaveStep).
+func (m *Manager) Rewind(runID string, seq int, note string) error {
+	_, err := m.replay(runID, runID, seq, note)
+	return err
+}
+
+// Fork starts a NEW run continuing from an earlier checkpoint of srcID (explore
+// an alternate path without disturbing the original). An empty newID is generated.
+func (m *Manager) Fork(srcID, newID string, seq int) (string, error) {
+	return m.replay(srcID, newID, seq, "")
+}
+
+func (m *Manager) replay(srcID, dstID string, seq int, note string) (string, error) {
+	src, err := m.handle(srcID)
+	if err != nil {
+		return "", err
+	}
+	if src.pipeline.store == nil {
+		return "", fmt.Errorf("pipeline: run %q has no store (lineage unavailable)", srcID)
+	}
+	st, err := src.pipeline.store.LoadAt(context.Background(), srcID, seq)
+	if err != nil {
+		return "", fmt.Errorf("pipeline: rewind %q@%d: %w", srcID, seq, err)
+	}
+
+	m.mu.Lock()
+	if dstID == "" {
+		m.seq++
+		dstID = fmt.Sprintf("%s-fork-%d", srcID, m.seq)
+	}
+	st.PipelineID = dstID
+	if note != "" { // inject guidance the re-run's stages can read via SteerKey
+		if st.Blackboard == nil {
+			st.Blackboard = map[string]any{}
+		}
+		prev, _ := st.Blackboard[SteerKey].([]any)
+		st.Blackboard[SteerKey] = append(prev, note)
+	}
+	p := m.factory(dstID)
+	runCtx, cancel := context.WithCancel(context.Background())
+	h := &runHandle{
+		id:       dstID,
+		control:  make(chan Control, 16),
+		hub:      newEventHub(),
+		cancel:   cancel,
+		pipeline: p,
+		done:     make(chan struct{}),
+	}
+	m.runs[dstID] = h // a rewind replaces the prior handle for the same id
+	m.mu.Unlock()
+
+	go func() {
+		defer close(h.done)
+		defer h.hub.close()
+		for ev := range p.runControlledFrom(runCtx, st, h.control) {
+			h.hub.publish(ev)
+		}
+	}()
+	return dstID, nil
+}
+
 // Close cancels all running runs' contexts (manager shutdown backstop).
 func (m *Manager) Close() {
 	m.mu.Lock()

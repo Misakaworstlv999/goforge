@@ -136,6 +136,21 @@ func (p *Pipeline) Run(ctx context.Context, pipelineID string, input any) iter.S
 	return p.runControlled(ctx, pipelineID, input, nil)
 }
 
+// runControlledFrom drives an EXISTING (loaded) state rather than a fresh one —
+// the basis for rewind/fork (time-travel). It restores the blackboard, marks the
+// run running, and re-executes from st.CurrentStage.
+func (p *Pipeline) runControlledFrom(ctx context.Context, st *PipelineState, control <-chan Control) iter.Seq2[Event, error] {
+	return func(yield func(Event, error) bool) {
+		p.bindHistory(ctx, st.PipelineID)
+		p.deps.State.Load(st.Blackboard)
+		st.Status = StatusRunning
+		if st.RetryCount == nil {
+			st.RetryCount = map[string]int{}
+		}
+		p.drive(ctx, st, control, yield)
+	}
+}
+
 // runControlled is Run with an optional control channel attached (the Manager
 // uses this for steerable runs). A nil control channel reproduces Run exactly.
 func (p *Pipeline) runControlled(ctx context.Context, pipelineID string, input any, control <-chan Control) iter.Seq2[Event, error] {
