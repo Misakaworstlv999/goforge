@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Misakaworstlv999/goforge/internal/config"
+	"github.com/Misakaworstlv999/goforge/internal/log"
 	"github.com/Misakaworstlv999/goforge/internal/telemetry"
 	"github.com/Misakaworstlv999/goforge/pkg/agent"
 	"github.com/Misakaworstlv999/goforge/pkg/llm"
@@ -75,6 +76,14 @@ func closeAll(cs []io.Closer) {
 	}
 }
 
+// storeKind describes the configured store for a log field.
+func storeKind(cfg config.Config) string {
+	if cfg.StorePath == "" {
+		return "memory"
+	}
+	return "sqlite:" + cfg.StorePath
+}
+
 // printEvent renders one pipeline event as a console line.
 func printEvent(w io.Writer, e pipeline.Event) {
 	fmt.Fprintf(w, "%-14s %-10s %s\n", e.Type.String(), e.Stage, e.Detail)
@@ -95,7 +104,7 @@ func initTelemetry(cfg config.Config) (func(context.Context) error, error) {
 // newServeServer builds the HTTP control-plane server and a cleanup func without
 // starting it — the testable wiring seam (the returned Handler can be mounted on
 // httptest without a live LLM, since the LLM is only touched once a run executes).
-func newServeServer(cfg config.Config) (*http.Server, func(), error) {
+func newServeServer(cfg config.Config, logger log.Logger) (*http.Server, func(), error) {
 	client := NewLLM(cfg)
 	reg, closers := BuildRegistry(context.Background(), cfg, io.Discard)
 	store, storeCloser, err := openStore(cfg)
@@ -108,7 +117,7 @@ func newServeServer(cfg config.Config) (*http.Server, func(), error) {
 	})
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           server.New(mgr).Handler(),
+		Handler:           server.New(mgr, server.WithLogger(logger)).Handler(),
 		ReadHeaderTimeout: shutdownGrace,
 	}
 	cleanup := func() {
@@ -127,6 +136,8 @@ func Serve(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
+	logger := log.New(cfg.LogLevel, cfg.LogFormat, os.Stderr)
+
 	shutdown, err := initTelemetry(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "telemetry:", err)
@@ -134,7 +145,7 @@ func Serve(args []string) int {
 	}
 	defer func() { _ = shutdown(context.Background()) }()
 
-	srv, cleanup, err := newServeServer(cfg)
+	srv, cleanup, err := newServeServer(cfg, logger)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -146,13 +157,14 @@ func Serve(args []string) int {
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
-	fmt.Fprintf(os.Stdout, "goforge serve listening on %s\n", cfg.HTTPAddr)
+	logger.Info("serve listening", "addr", cfg.HTTPAddr, "store", storeKind(cfg))
 
 	select {
 	case <-ctx.Done():
+		logger.Info("shutdown signal received")
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			fmt.Fprintln(os.Stderr, "serve:", err)
+			logger.Error("serve failed", "error", err.Error())
 			return 1
 		}
 	}

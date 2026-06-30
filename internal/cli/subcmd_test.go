@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/Misakaworstlv999/goforge/internal/config"
+	"github.com/Misakaworstlv999/goforge/internal/log"
 	"github.com/Misakaworstlv999/goforge/pkg/pipeline"
 )
 
@@ -107,7 +108,7 @@ func TestNewServeServer_healthzAndRoutes(t *testing.T) {
 		MCPExpose:     config.MCPExposeDirect,
 		HTTPAddr:      ":0",
 	}
-	srv, cleanup, err := newServeServer(cfg)
+	srv, cleanup, err := newServeServer(cfg, log.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}

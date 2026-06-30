@@ -9,16 +9,31 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/Misakaworstlv999/goforge/internal/log"
 	"github.com/Misakaworstlv999/goforge/pkg/pipeline"
 )
 
 // Server adapts a pipeline.Manager to HTTP.
 type Server struct {
 	mgr *pipeline.Manager
+	log log.Logger
 }
 
+// Option configures a Server.
+type Option func(*Server)
+
+// WithLogger injects a structured logger for request lifecycle events. Without
+// it the server logs nothing (no-op), so existing callers are unaffected.
+func WithLogger(l log.Logger) Option { return func(s *Server) { s.log = l } }
+
 // New builds a Server over a Manager.
-func New(mgr *pipeline.Manager) *Server { return &Server{mgr: mgr} }
+func New(mgr *pipeline.Manager, opts ...Option) *Server {
+	s := &Server{mgr: mgr, log: log.Nop()}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
+}
 
 // Handler returns the routed HTTP handler (Go 1.22+ method+path patterns).
 func (s *Server) Handler() http.Handler {
@@ -43,9 +58,11 @@ func (s *Server) trigger(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	id, err := s.mgr.Trigger(req.RunID, req.Input)
 	if err != nil {
+		s.log.Warn("trigger failed", "error", err.Error())
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	s.log.Info("run triggered", "run_id", id)
 	writeJSON(w, http.StatusCreated, map[string]string{"run_id": id})
 }
 
@@ -167,9 +184,11 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		s.log.Warn("control failed", "run_id", id, "op", req.Op, "error", err.Error())
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	s.log.Info("control applied", "run_id", id, "op", req.Op)
 	w.WriteHeader(http.StatusNoContent)
 }
 
