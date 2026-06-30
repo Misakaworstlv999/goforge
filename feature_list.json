@@ -422,13 +422,13 @@
       "id": "M7",
       "name": "Production Ready",
       "goal": "HTTP API, CLI, observability, and documentation — REFRAMED around a Steerable Run Control Plane (see docs/WORKFLOW_CONTROL_RESEARCH.md): a run is a durable, addressable, observable, steerable resource driven identically by humans and agents.",
-      "ai_skills": "MCP protocol, Webhook integration",
-      "go_skills": "net/http, OpenTelemetry, zap, cobra",
+      "ai_skills": "Agent-as-controller (steer/redirect/rewind a run via function calls), MCP client tooling",
+      "go_skills": "net/http + SSE, stdlib flag CLI + graceful shutdown, OpenTelemetry, zap",
       "features": [
         {
           "id": "M7-001",
           "name": "HTTP API Server",
-          "description": "REST API: POST /pipeline/trigger, GET /pipeline/{id}, POST /pipeline/{id}/resume, GET /health. net/http stdlib.",
+          "description": "HTTP + SSE control plane over the run Manager (stdlib net/http): POST /v1/runs (trigger), GET /v1/runs[/{id}] (list/state), GET /v1/runs/{id}/events (SSE replay+live), GET /v1/runs/{id}/checkpoints, POST /v1/runs/{id}/control (pause/resume/steer/redirect/cancel/rewind/fork), GET /healthz. The same operations are also exposed as a builtin control tool set so agents steer runs identically (agent == human).",
           "dependencies": [
             "M5-004"
           ],
@@ -438,17 +438,17 @@
         {
           "id": "M7-002",
           "name": "Webhook Handler",
-          "description": "GitHub/GitLab webhook endpoint: receive MR comments, trigger pipeline resume or review.",
+          "description": "Code-host webhook endpoint: receive MR/PR comments, trigger a pipeline run or resume.",
           "dependencies": [
             "M7-001"
           ],
           "status": "not-started",
-          "evidence": ""
+          "evidence": "Deferred (like M7-005): M7 was reframed around the steerable control plane, which already lets any external caller drive runs over HTTP. A webhook is a product-facing integration adapter — build it when a concrete trigger source is needed, not as core M7."
         },
         {
           "id": "M7-003",
           "name": "CLI",
-          "description": "Command-line interface: goforge chat (interactive), goforge run (trigger pipeline), goforge status. Single binary.",
+          "description": "Single-binary CLI (stdlib flag + switch dispatch, no cobra): default with no subcommand = interactive REPL (unchanged); goforge serve (HTTP control plane), run <task> (trigger + stream events), status / resume (inspect / continue a persisted run).",
           "dependencies": [
             "M3-004",
             "M5-002"
@@ -492,7 +492,7 @@
     {
       "id": "M8",
       "name": "Long-term Memory & Retrieval",
-      "goal": "Cross-session persistent memory + semantic retrieval for the long-running AI coding product (dev-workflow). Pluggable, CGO-free by default; vector DB when warranted.",
+      "goal": "Cross-session SEMANTIC memory + retrieval (RAG) for the long-running dev-workflow product — distinct from M5's execution persistence. M5's checkpoint store durably persists a run's state/transcript/audit/lineage for exact resume/replay/time-travel (keyed by run id + seq); M8 instead indexes knowledge by MEANING (embeddings + vector search) so an agent recalls relevant facts/episodes ACROSS runs and projects, regardless of which run produced them. Builds on top of M5 (M8-004 reuses the M5-003 OnEvict seam; M8-005 distills from completed runs). Pluggable, CGO-free by default; vector DB when warranted.",
       "ai_skills": "Embeddings, semantic search, RAG, memory extraction (facts/episodes)",
       "go_skills": "Narrow interfaces + pluggable backends, cosine similarity, HTTP clients",
       "notes": "Reserved per product framing: dev-workflow is a long-line one-stop AI coding app, so long-term memory is a core need. Plugs into existing abstractions — ContextPolicy.Sources (auto pre-step retrieval, M4-005 seam) and Ring 2 Tool (agent-driven). No-CGO/single-binary constraint drives backends (in-memory cosine first; pgvector/external vector service as adapters). M6 dev-workflow may use a trivial ContextSource; M8 can be pulled before M6 if the product needs it earlier.",
