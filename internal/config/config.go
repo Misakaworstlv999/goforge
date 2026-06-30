@@ -62,6 +62,29 @@ type Config struct {
 	// registered individually) or "broker" (3 meta-tools for progressive
 	// disclosure — better when there are many tools).
 	MCPExpose string
+
+	// --- Ring 5 service settings (consumed by the serve/run/status/resume
+	// subcommands; the interactive REPL ignores them, so their defaults keep
+	// today's behavior unchanged). ---
+
+	// HTTPAddr is the listen address for `goforge serve`.
+	HTTPAddr string
+	// StorePath, when non-empty, opens a SQLite checkpoint store at this path so
+	// runs persist across processes (required by status/resume). Empty ⇒ an
+	// in-memory store (live only within one process).
+	StorePath string
+	// OTelEndpoint is the OTLP collector endpoint (host:port). Empty ⇒ telemetry
+	// stays a no-op (nothing is exported). Never hardcode an endpoint; it must
+	// come from flag/env.
+	OTelEndpoint string
+	// OTelInsecure sends OTLP over plaintext (no TLS) when true.
+	OTelInsecure bool
+	// ServiceName is the service.name resource attribute for telemetry.
+	ServiceName string
+	// LogLevel is the minimum structured-log level: debug|info|warn|error.
+	LogLevel string
+	// LogFormat selects the log encoding: console|json.
+	LogFormat string
 }
 
 // Default values shared by Parse and tests.
@@ -70,6 +93,10 @@ const (
 	defaultMaxSteps    = 10
 	defaultToolTimeout = 30 * time.Second
 	defaultEnvFile     = ".env"
+	defaultHTTPAddr    = ":8080"
+	defaultServiceName = "goforge"
+	defaultLogLevel    = "info"
+	defaultLogFormat   = "console"
 )
 
 // Environment variable names. Non-secret app settings use a GOFORGE_ prefix;
@@ -86,6 +113,13 @@ const (
 	envAllowCommands = "GOFORGE_ALLOW_COMMANDS"
 	envMCPConfig     = "GOFORGE_MCP_CONFIG"
 	envMCPExpose     = "GOFORGE_MCP_EXPOSE"
+	envHTTPAddr      = "GOFORGE_HTTP_ADDR"
+	envStore         = "GOFORGE_STORE"
+	envOTelEndpoint  = "GOFORGE_OTEL_ENDPOINT"
+	envOTelInsecure  = "GOFORGE_OTEL_INSECURE"
+	envServiceName   = "GOFORGE_SERVICE_NAME"
+	envLogLevel      = "GOFORGE_LOG_LEVEL"
+	envLogFormat     = "GOFORGE_LOG_FORMAT"
 )
 
 const (
@@ -102,16 +136,31 @@ const (
 // (pass os.Getenv from main) so the function stays testable and free of global
 // state.
 func Parse(args []string, getenv func(string) string) (Config, error) {
-	return ParseWithEnvFile(args, getenv, defaultEnvFile)
+	cfg, _, err := parseConfig(args, getenv, defaultEnvFile)
+	return cfg, err
 }
 
 // ParseWithEnvFile is Parse with an explicit .env path, used by tests. A missing
 // file is not an error. Precedence (low→high): defaults < .env < process env <
 // flags. Process environment wins over .env (principle of least surprise).
 func ParseWithEnvFile(args []string, getenv func(string) string, envPath string) (Config, error) {
+	cfg, _, err := parseConfig(args, getenv, envPath)
+	return cfg, err
+}
+
+// ParseArgs is Parse but also returns the leftover positional arguments (the
+// task for `run`, the run id for `status`/`resume`). Flags must precede
+// positionals, per the standard flag package.
+func ParseArgs(args []string, getenv func(string) string) (Config, []string, error) {
+	return parseConfig(args, getenv, defaultEnvFile)
+}
+
+// parseConfig is the shared parsing body returning the resolved config and the
+// leftover positional args.
+func parseConfig(args []string, getenv func(string) string, envPath string) (Config, []string, error) {
 	dotenv, err := loadDotEnv(envPath)
 	if err != nil {
-		return Config{}, err
+		return Config{}, nil, err
 	}
 	// lookup layers process env over the .env file.
 	lookup := func(key string) string {
@@ -142,9 +191,16 @@ func ParseWithEnvFile(args []string, getenv func(string) string, envPath string)
 	fs.StringVar(&allowCommands, "allow-commands", "", "Comma-separated shell command allowlist; empty disables exec_command")
 	fs.StringVar(&cfg.MCPConfigPath, "mcp-config", defaultMCPConfigPath, "Path to a standard mcpServers JSON config (.mcp.json); missing file = no MCP servers")
 	fs.StringVar(&cfg.MCPExpose, "mcp-expose", MCPExposeDirect, "How MCP tools reach the agent: direct | broker (progressive disclosure)")
+	fs.StringVar(&cfg.HTTPAddr, "http", defaultHTTPAddr, "HTTP listen address for `goforge serve`")
+	fs.StringVar(&cfg.StorePath, "store", "", "SQLite checkpoint store path; empty = in-memory (status/resume require a path)")
+	fs.StringVar(&cfg.OTelEndpoint, "otel-endpoint", "", "OTLP collector endpoint (host:port); empty = telemetry disabled")
+	fs.BoolVar(&cfg.OTelInsecure, "otel-insecure", false, "Send OTLP over plaintext (no TLS)")
+	fs.StringVar(&cfg.ServiceName, "service-name", defaultServiceName, "service.name resource attribute for telemetry")
+	fs.StringVar(&cfg.LogLevel, "log-level", defaultLogLevel, "Log level: debug | info | warn | error")
+	fs.StringVar(&cfg.LogFormat, "log-format", defaultLogFormat, "Log format: console | json")
 
 	if err := fs.Parse(args); err != nil {
-		return Config{}, err
+		return Config{}, nil, err
 	}
 
 	// For any flag not explicitly set on the command line, fall back to the
@@ -181,7 +237,7 @@ func ParseWithEnvFile(args []string, getenv func(string) string, envPath string)
 		if v := lookup(envMaxSteps); v != "" {
 			n, err := strconv.Atoi(v)
 			if err != nil {
-				return Config{}, fmt.Errorf("invalid %s %q: %w", envMaxSteps, v, err)
+				return Config{}, nil, fmt.Errorf("invalid %s %q: %w", envMaxSteps, v, err)
 			}
 			cfg.MaxSteps = n
 		}
@@ -190,7 +246,7 @@ func ParseWithEnvFile(args []string, getenv func(string) string, envPath string)
 		if v := lookup(envToolTimeout); v != "" {
 			d, err := time.ParseDuration(v)
 			if err != nil {
-				return Config{}, fmt.Errorf("invalid %s %q: %w", envToolTimeout, v, err)
+				return Config{}, nil, fmt.Errorf("invalid %s %q: %w", envToolTimeout, v, err)
 			}
 			cfg.ToolTimeout = d
 		}
@@ -215,15 +271,54 @@ func ParseWithEnvFile(args []string, getenv func(string) string, envPath string)
 			cfg.MCPExpose = v
 		}
 	}
+	if !set["http"] {
+		if v := lookup(envHTTPAddr); v != "" {
+			cfg.HTTPAddr = v
+		}
+	}
+	if !set["store"] {
+		if v := lookup(envStore); v != "" {
+			cfg.StorePath = v
+		}
+	}
+	if !set["otel-endpoint"] {
+		if v := lookup(envOTelEndpoint); v != "" {
+			cfg.OTelEndpoint = v
+		}
+	}
+	if !set["otel-insecure"] {
+		if v := lookup(envOTelInsecure); v != "" {
+			b, err := strconv.ParseBool(v)
+			if err != nil {
+				return Config{}, nil, fmt.Errorf("invalid %s %q: %w", envOTelInsecure, v, err)
+			}
+			cfg.OTelInsecure = b
+		}
+	}
+	if !set["service-name"] {
+		if v := lookup(envServiceName); v != "" {
+			cfg.ServiceName = v
+		}
+	}
+	if !set["log-level"] {
+		if v := lookup(envLogLevel); v != "" {
+			cfg.LogLevel = v
+		}
+	}
+	if !set["log-format"] {
+		if v := lookup(envLogFormat); v != "" {
+			cfg.LogFormat = v
+		}
+	}
 	if cfg.MCPExpose != MCPExposeDirect && cfg.MCPExpose != MCPExposeBroker {
-		return Config{}, fmt.Errorf("invalid -mcp-expose %q: want direct or broker", cfg.MCPExpose)
+		return Config{}, nil, fmt.Errorf("invalid -mcp-expose %q: want direct or broker", cfg.MCPExpose)
 	}
 	cfg.Workdirs = splitCommaList(workdirs)
 	cfg.AllowCommands = splitCommaList(allowCommands)
 
 	cfg.Mode = Mode(mode)
 	if !cfg.Mode.valid() {
-		return Config{}, fmt.Errorf("invalid -mode %q: want chat, tools, or agent", mode)
+		return Config{}, nil, fmt.Errorf("invalid -mode %q: want chat, tools, or agent", mode)
 	}
 
 	// API key: explicit flag wins; otherwise resolve the provider-specific var
@@ -232,7 +327,7 @@ func ParseWithEnvFile(args []string, getenv func(string) string, envPath string)
 		cfg.APIKey = lookup(apiKeyEnv(cfg.Provider))
 	}
 
-	return cfg, nil
+	return cfg, fs.Args(), nil
 }
 
 // splitCommaList parses a comma-separated list into trimmed, non-empty items.

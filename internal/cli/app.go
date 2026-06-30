@@ -73,15 +73,28 @@ func (a *App) turnForMode(ctx context.Context) (turn, string) {
 	}
 }
 
-// buildRegistry assembles the toolset: calculator + clock always, file tools
-// (read/write/list) sandboxed to the configured workdirs, and exec_command only
-// when a command allowlist is configured (arbitrary exec is opt-in). If the
-// sandbox cannot be created the file/shell tools are skipped with a warning.
+// buildRegistry assembles the App's toolset and tracks any MCP clients for
+// teardown. It delegates to the reusable BuildRegistry so other edge entry
+// points (serve/run) compose the identical toolset.
 func (a *App) buildRegistry(ctx context.Context) *tool.Registry {
+	reg, closers := BuildRegistry(ctx, a.cfg, a.out)
+	a.closers = append(a.closers, closers...)
+	return reg
+}
+
+// BuildRegistry assembles the toolset from config: calculator + clock always,
+// file tools (read/write/list) sandboxed to the configured workdirs, and
+// exec_command only when a command allowlist is configured (arbitrary exec is
+// opt-in). If the sandbox cannot be created the file/shell tools are skipped
+// with a warning. MCP servers from cfg.MCPConfigPath are registered (direct or
+// broker per cfg.MCPExpose). It returns the registry and any io.Closers (MCP
+// clients) the caller must Close on shutdown. It is the single composition point
+// for the toolset, reused by the interactive REPL and the serve/run subcommands.
+func BuildRegistry(ctx context.Context, cfg config.Config, out io.Writer) (*tool.Registry, []io.Closer) {
 	reg := tool.NewRegistry()
 	_ = reg.Register(builtin.NewCalculator(), builtin.NewClock())
 
-	roots := a.cfg.Workdirs
+	roots := cfg.Workdirs
 	if len(roots) == 0 {
 		if wd, err := os.Getwd(); err == nil {
 			roots = []string{wd}
@@ -89,31 +102,32 @@ func (a *App) buildRegistry(ctx context.Context) *tool.Registry {
 	}
 
 	sb, err := builtin.NewSandbox(roots,
-		builtin.WithAllowedCommands(a.cfg.AllowCommands...),
-		builtin.WithCommandTimeout(a.cfg.ToolTimeout),
+		builtin.WithAllowedCommands(cfg.AllowCommands...),
+		builtin.WithCommandTimeout(cfg.ToolTimeout),
 	)
 	if err != nil {
-		fmt.Fprintf(a.out, "warning: file/shell tools disabled: %v\n", err)
+		fmt.Fprintf(out, "warning: file/shell tools disabled: %v\n", err)
 	} else {
 		_ = reg.Register(builtin.NewReadFile(sb), builtin.NewWriteFile(sb), builtin.NewListFiles(sb))
-		if len(a.cfg.AllowCommands) > 0 {
+		if len(cfg.AllowCommands) > 0 {
 			_ = reg.Register(builtin.NewExecCommand(sb))
 		}
 	}
 
-	a.registerMCPServers(ctx, reg)
-	return reg
+	closers := registerMCPServers(ctx, cfg, reg, out)
+	return reg, closers
 }
 
 // registerMCPServers loads the standard mcpServers config and registers each
-// server's tools. A missing config file means no servers; a server that fails
-// to parse or connect is skipped with a warning so it can't take down the rest
-// of the toolset. Servers are processed in sorted name order for determinism.
-func (a *App) registerMCPServers(ctx context.Context, reg *tool.Registry) {
-	sc, err := mcpclient.LoadServersConfig(a.cfg.MCPConfigPath)
+// server's tools, returning the connected clients as io.Closers. A missing
+// config file means no servers; a server that fails to parse or connect is
+// skipped with a warning so it can't take down the rest of the toolset. Servers
+// are processed in sorted name order for determinism.
+func registerMCPServers(ctx context.Context, cfg config.Config, reg *tool.Registry, out io.Writer) []io.Closer {
+	sc, err := mcpclient.LoadServersConfig(cfg.MCPConfigPath)
 	if err != nil {
-		fmt.Fprintf(a.out, "warning: MCP config %s ignored: %v\n", a.cfg.MCPConfigPath, err)
-		return
+		fmt.Fprintf(out, "warning: MCP config %s ignored: %v\n", cfg.MCPConfigPath, err)
+		return nil
 	}
 
 	names := make([]string, 0, len(sc.MCPServers))
@@ -123,40 +137,42 @@ func (a *App) registerMCPServers(ctx context.Context, reg *tool.Registry) {
 	sort.Strings(names)
 
 	var mcpTools []tool.Tool
+	var closers []io.Closer
 	for _, name := range names {
-		cfg, err := sc.MCPServers[name].ToConfig(name)
+		mcfg, err := sc.MCPServers[name].ToConfig(name)
 		if err != nil {
-			fmt.Fprintf(a.out, "warning: MCP server %q skipped: %v\n", name, err)
+			fmt.Fprintf(out, "warning: MCP server %q skipped: %v\n", name, err)
 			continue
 		}
-		cfg.ToolPrefix = name // namespace this server's tools (avoid collisions)
-		client, err := mcpclient.New(ctx, cfg)
+		mcfg.ToolPrefix = name // namespace this server's tools (avoid collisions)
+		client, err := mcpclient.New(ctx, mcfg)
 		if err != nil {
-			fmt.Fprintf(a.out, "warning: MCP server %q disabled: %v\n", name, err)
+			fmt.Fprintf(out, "warning: MCP server %q disabled: %v\n", name, err)
 			continue
 		}
 		tools, err := client.Tools(ctx)
 		if err != nil {
-			fmt.Fprintf(a.out, "warning: MCP server %q tools skipped: %v\n", name, err)
+			fmt.Fprintf(out, "warning: MCP server %q tools skipped: %v\n", name, err)
 			_ = client.Close()
 			continue
 		}
 		mcpTools = append(mcpTools, tools...)
-		a.closers = append(a.closers, client)
+		closers = append(closers, client)
 	}
 	if len(mcpTools) == 0 {
-		return
+		return closers
 	}
 
 	// direct: register every tool; broker: expose 3 meta-tools (progressive
 	// disclosure) instead, keeping the system prompt small.
-	if a.cfg.MCPExpose == config.MCPExposeBroker {
+	if cfg.MCPExpose == config.MCPExposeBroker {
 		if err := reg.RegisterSet(ctx, mcpclient.NewBroker(mcpTools)); err != nil {
-			fmt.Fprintf(a.out, "warning: MCP broker tools skipped: %v\n", err)
+			fmt.Fprintf(out, "warning: MCP broker tools skipped: %v\n", err)
 		}
-		return
+		return closers
 	}
 	if err := reg.Register(mcpTools...); err != nil {
-		fmt.Fprintf(a.out, "warning: some MCP tools skipped: %v\n", err)
+		fmt.Fprintf(out, "warning: some MCP tools skipped: %v\n", err)
 	}
+	return closers
 }
