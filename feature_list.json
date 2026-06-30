@@ -453,8 +453,8 @@
             "M3-004",
             "M5-002"
           ],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "cmd/goforge/main.go dispatches subcommands via stdlib flag + switch (no cobra, honoring zero-framework rule): a bare subcommand routes to its handler, anything else (flags/no args) falls through to the unchanged interactive REPL. internal/cli/subcmd.go: serve (HTTP control plane over a Manager + signal.NotifyContext + http.Server.Shutdown graceful drain), run <task> (trigger + stream events), status -store <p> <id> (state + checkpoint lineage + audit), resume -store <p> <id>. Reusable BuildRegistry + NewLLM shared with the REPL; config gains HTTPAddr/StorePath/OTel*/Log* fields + ParseArgs (positionals). Handlers delegate to testable cores (newServeServer/streamRun/printStatus/streamResume) — unit-tested without a live LLM (subcmd_test.go), -race."
         },
         {
           "id": "M7-004",
@@ -464,8 +464,8 @@
             "M5-002",
             "M3-002"
           ],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "internal/telemetry (OTel API + SDK + OTLP exporters): StartStage/StartLLM/StartTool/RecordLLMUsage/End helpers over the global provider; Init(ctx, Options{Endpoint,Insecure,ServiceName}) wires OTLP HTTP trace+metric exporters, empty endpoint = no-op (zero overhead, behavior unchanged — the M7 zero-value invariant). Instrumented pkg/pipeline drive (stage span; its ctx parents agent spans) and pkg/agent loop (LLM span per step with prompt/completion tokens, tool-batch span); Ring 1/2 stay otel-free, spans nest via context. OTLP endpoint only from flag/env (never hardcoded). internal/log: narrow Logger interface + zap default + Nop, DI via WithLogger into pkg/server and internal/cli serve (inner rings untouched). Tests: tracetest SpanRecorder asserts span names/token attrs/nesting + no-op default (telemetry_test.go); log level filtering + Nop (log_test.go), -race."
         },
         {
           "id": "M7-005",
@@ -484,8 +484,8 @@
           "dependencies": [
             "M6-005"
           ],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "README.md: 5-ring ASCII architecture diagram, why/control-plane framing, quickstart (build + REPL + serve/run/status/resume), control-plane API reference (HTTP route table + control ops incl. rewind/fork + the agent-as-controller tool set + safe points), observability (OTLP opt-in), project layout, ./init.sh dev gate, desensitization note. Passes the desensitization scan (no employer/product/internal-system names; OTLP endpoint via flag/env only)."
         }
       ]
     },
