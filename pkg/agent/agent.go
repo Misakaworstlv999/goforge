@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"strings"
 	"time"
 
+	"github.com/Misakaworstlv999/goforge/internal/telemetry"
 	"github.com/Misakaworstlv999/goforge/pkg/llm"
 	"github.com/Misakaworstlv999/goforge/pkg/tool"
 )
@@ -183,11 +185,17 @@ func (a *SimpleAgent) Run(ctx context.Context, task string) iter.Seq2[Event, err
 				}
 			}
 
-			resp, err := a.llm.Chat(ctx, messages, chatOpts...)
+			// LLM span (no-op unless telemetry.Init wired a provider). Nests under
+			// the pipeline stage span when the agent runs inside a pipeline.
+			llmCtx, llmSpan := telemetry.StartLLM(ctx, a.model, step)
+			resp, err := a.llm.Chat(llmCtx, messages, chatOpts...)
 			if err != nil {
+				telemetry.End(llmSpan, err)
 				yield(ErrorEvent(err, step), err)
 				return
 			}
+			telemetry.RecordLLMUsage(llmSpan, resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
+			telemetry.End(llmSpan, nil)
 			lastUsage = resp.Usage.TotalTokens
 			record(resp.Message)
 
@@ -211,8 +219,11 @@ func (a *SimpleAgent) Run(ctx context.Context, task string) iter.Seq2[Event, err
 				}
 			}
 
-			// Execute concurrently; one failure does not cancel the others.
-			results := tool.ExecuteParallel(ctx, a.registry, resp.Message.ToolCalls, a.toolTimeout)
+			// Execute concurrently; one failure does not cancel the others. Tool
+			// span (no-op unless telemetry is wired) covers the whole batch.
+			toolCtx, toolSpan := telemetry.StartTool(ctx, step, len(resp.Message.ToolCalls), toolCallNames(resp.Message.ToolCalls))
+			results := tool.ExecuteParallel(toolCtx, a.registry, resp.Message.ToolCalls, a.toolTimeout)
+			telemetry.End(toolSpan, nil)
 
 			// Observe: feed every result back into the conversation.
 			for _, r := range results {
@@ -245,6 +256,16 @@ func (a *SimpleAgent) Run(ctx context.Context, task string) iter.Seq2[Event, err
 
 		yield(ErrorEvent(ErrMaxStepsExceeded, a.maxSteps), ErrMaxStepsExceeded)
 	}
+}
+
+// toolCallNames joins the requested tool-call names for a telemetry span
+// attribute (comma-separated, order preserved).
+func toolCallNames(calls []llm.ToolCall) string {
+	names := make([]string, len(calls))
+	for i, c := range calls {
+		names[i] = c.Name
+	}
+	return strings.Join(names, ",")
 }
 
 // chatOpts builds the per-call LLM options: registered tool schemas plus an

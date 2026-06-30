@@ -7,6 +7,7 @@ import (
 	"iter"
 	"time"
 
+	"github.com/Misakaworstlv999/goforge/internal/telemetry"
 	"github.com/Misakaworstlv999/goforge/pkg/llm"
 )
 
@@ -245,7 +246,11 @@ func (p *Pipeline) drive(ctx context.Context, st *PipelineState, control <-chan 
 			return
 		}
 
-		out, err := n.run(ctx, st.StageInput, deps)
+		// Stage span: the returned context parents the agent's LLM/tool spans.
+		// No-op (zero cost) unless telemetry.Init wired a real provider.
+		stageCtx, span := telemetry.StartStage(ctx, st.CurrentStage)
+		out, err := n.run(stageCtx, st.StageInput, deps)
+		telemetry.End(span, err)
 		if err != nil {
 			var ab *controlAbort
 			if errors.As(err, &ab) {

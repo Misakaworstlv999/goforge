@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Misakaworstlv999/goforge/internal/config"
+	"github.com/Misakaworstlv999/goforge/internal/telemetry"
 	"github.com/Misakaworstlv999/goforge/pkg/agent"
 	"github.com/Misakaworstlv999/goforge/pkg/llm"
 	"github.com/Misakaworstlv999/goforge/pkg/pipeline"
@@ -79,6 +80,16 @@ func printEvent(w io.Writer, e pipeline.Event) {
 	fmt.Fprintf(w, "%-14s %-10s %s\n", e.Type.String(), e.Stage, e.Detail)
 }
 
+// initTelemetry wires OTLP export per cfg and returns a shutdown func. With no
+// endpoint configured it is a no-op (telemetry stays disabled, zero overhead).
+func initTelemetry(cfg config.Config) (func(context.Context) error, error) {
+	return telemetry.Init(context.Background(), telemetry.Options{
+		Endpoint:    cfg.OTelEndpoint,
+		Insecure:    cfg.OTelInsecure,
+		ServiceName: cfg.ServiceName,
+	})
+}
+
 // --- serve ---
 
 // newServeServer builds the HTTP control-plane server and a cleanup func without
@@ -116,6 +127,13 @@ func Serve(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
+	shutdown, err := initTelemetry(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "telemetry:", err)
+		return 1
+	}
+	defer func() { _ = shutdown(context.Background()) }()
+
 	srv, cleanup, err := newServeServer(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -184,6 +202,13 @@ func RunCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: goforge run [flags] <task>")
 		return 2
 	}
+
+	shutdown, err := initTelemetry(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "telemetry:", err)
+		return 1
+	}
+	defer func() { _ = shutdown(context.Background()) }()
 
 	client := NewLLM(cfg)
 	reg, closers := BuildRegistry(context.Background(), cfg, os.Stderr)
