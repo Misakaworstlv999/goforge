@@ -98,6 +98,7 @@ A run is addressable by id and driven by the same verbs over three surfaces.
 | `GET /v1/runs/{id}` | Current state (status, stage, blackboard) |
 | `GET /v1/runs/{id}/events` | Event stream (SSE): full replay, then live |
 | `GET /v1/runs/{id}/checkpoints` | Checkpoint lineage (the seqs rewind/fork target) |
+| `GET /v1/runs/{id}/transcript` | Reasoning transcript (LLM messages); `?format=text&level=final\|steps\|full` renders it |
 | `POST /v1/runs/{id}/control` | Steer the run (see ops below) |
 
 `POST /v1/runs/{id}/control` takes `{"op": "...", ...}`:
@@ -114,10 +115,16 @@ A run is addressable by id and driven by the same verbs over three surfaces.
 ### Agent-as-controller (function calls)
 
 `pipeline.ControlTools(manager)` returns a tool set — `trigger_run`,
-`list_runs`, `get_run_state`, `get_run_events`, `pause_run`, `resume_run`,
-`steer_run`, `redirect_run`, `cancel_run`, `list_checkpoints`, `rewind_run`,
-`fork_run` — so an in-process supervisor agent steers worker runs with the exact
-same semantics a human uses over HTTP. (No separate MCP/A2A server needed.)
+`list_runs`, `get_run_state`, `get_run_events`, `get_run_transcript`,
+`pause_run`, `resume_run`, `steer_run`, `redirect_run`, `cancel_run`,
+`list_checkpoints`, `rewind_run`, `fork_run` — so an in-process supervisor agent
+steers worker runs with the exact same semantics a human uses over HTTP. (No
+separate MCP/A2A server needed.)
+
+Crucially, `get_run_transcript` un-blackboxes a run: a controller can read the
+worker's step-by-step reasoning, tool calls, and tool results (at `final`,
+`steps`, or `full` verbosity) to diagnose *why* a run failed before deciding what
+to steer, redirect, or inject.
 
 ### Safe points
 

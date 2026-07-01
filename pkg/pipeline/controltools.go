@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Misakaworstlv999/goforge/pkg/llm"
 	"github.com/Misakaworstlv999/goforge/pkg/tool"
 )
 
@@ -104,6 +105,21 @@ func ControlTools(m *Manager) []tool.Tool {
 				return ack("canceled", a.RunID, m.Cancel(a.RunID, a.Reason))
 			}),
 
+		tool.NewTool("get_run_transcript", "Read a run's reasoning transcript (the LLM's step-by-step messages: reasoning, tool calls, tool results) so you can audit WHY it behaved as it did before steering/redirecting/rewinding it. level tunes verbosity like a log level: final (just the last answer) | steps (reasoning + tool names + result status; default) | full (everything verbatim, including tool args and result bodies).",
+			func(ctx context.Context, a struct {
+				RunID string `json:"run_id" jsonschema:"description=The run id,required"`
+				Level string `json:"level" jsonschema:"description=Detail level: final | steps | full (default steps)"`
+			}) (string, error) {
+				msgs, err := m.Transcript(ctx, a.RunID)
+				if err != nil {
+					return "", err
+				}
+				if len(msgs) == 0 {
+					return "(no transcript yet: the run has no store, or has not produced any messages)", nil
+				}
+				return RenderTranscript(msgs, a.Level), nil
+			}),
+
 		tool.NewTool("list_checkpoints", "List a run's checkpoint lineage (seq, stage, status) — the points rewind/fork can target.",
 			func(ctx context.Context, a runID) (string, error) {
 				cps, err := m.Checkpoints(ctx, a.RunID)
@@ -146,4 +162,68 @@ func ack(verb, runID string, err error) (string, error) {
 		return "", err
 	}
 	return verb + " run " + runID, nil
+}
+
+// RenderTranscript formats a durable reasoning transcript for a controller to
+// audit. level tunes verbosity like a log level:
+//   - "final": only the last assistant message (the answer).
+//   - "steps" (default): the task, each assistant reasoning turn, tool-call
+//     names, and tool-result status/preview — the "why" without the bulk.
+//   - "full": everything verbatim, including the system prompt, tool-call
+//     arguments, and full tool-result bodies.
+//
+// An unknown level is treated as "steps".
+func RenderTranscript(msgs []llm.Message, level string) string {
+	switch level {
+	case "final", "steps", "full":
+	default:
+		level = "steps"
+	}
+
+	if level == "final" {
+		for i := len(msgs) - 1; i >= 0; i-- {
+			if msgs[i].Role == llm.RoleAssistant && msgs[i].Content != "" {
+				return msgs[i].Content
+			}
+		}
+		return "(no final assistant message)"
+	}
+
+	var b strings.Builder
+	for _, msg := range msgs {
+		switch msg.Role {
+		case llm.RoleSystem:
+			if level == "full" {
+				fmt.Fprintf(&b, "[system] %s\n", msg.Content)
+			}
+		case llm.RoleUser:
+			fmt.Fprintf(&b, "[user] %s\n", clip(msg.Content, level))
+		case llm.RoleAssistant:
+			if msg.Content != "" {
+				fmt.Fprintf(&b, "[assistant] %s\n", msg.Content)
+			}
+			for _, tc := range msg.ToolCalls {
+				if level == "full" {
+					fmt.Fprintf(&b, "  → tool_call %s(%s)\n", tc.Name, tc.Args)
+				} else {
+					fmt.Fprintf(&b, "  → tool_call %s\n", tc.Name)
+				}
+			}
+		case llm.RoleTool:
+			status := "ok"
+			if msg.IsError {
+				status = "ERROR"
+			}
+			fmt.Fprintf(&b, "  ← tool_result [%s] %s\n", status, clip(msg.Content, level))
+		}
+	}
+	return b.String()
+}
+
+// clip returns s verbatim at "full" level, otherwise a truncated preview.
+func clip(s, level string) string {
+	if level == "full" {
+		return s
+	}
+	return describe(s) // describe truncates to a readable preview (…)
 }

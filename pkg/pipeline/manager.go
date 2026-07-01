@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+
+	"github.com/Misakaworstlv999/goforge/pkg/llm"
 )
 
 // Manager makes pipeline runs first-class, addressable, observable, and
@@ -142,6 +144,22 @@ func (m *Manager) Redirect(runID, stage, note string) error {
 }
 func (m *Manager) Cancel(runID, reason string) error {
 	return m.signal(runID, Control{Op: OpCancel, Note: reason})
+}
+
+// Transcript returns the run's full durable reasoning transcript (the LLM
+// messages produced as it ran: assistant reasoning, tool calls, and tool
+// results). This is what lets a controller see WHY a run behaved as it did —
+// e.g. to diagnose a failure before steering/redirecting it. Requires a store
+// (the transcript is captured append-on-produce via the durable log).
+func (m *Manager) Transcript(ctx context.Context, runID string) ([]llm.Message, error) {
+	h, err := m.handle(runID)
+	if err != nil {
+		return nil, err
+	}
+	if h.pipeline.store == nil {
+		return nil, fmt.Errorf("pipeline: run %q has no store (transcript unavailable)", runID)
+	}
+	return h.pipeline.store.History(ctx, runID)
 }
 
 // Checkpoints returns the run's checkpoint lineage (seq-ordered), the addressable

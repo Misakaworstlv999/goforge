@@ -46,6 +46,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/runs/{id}", s.state)
 	mux.HandleFunc("GET /v1/runs/{id}/events", s.events)
 	mux.HandleFunc("GET /v1/runs/{id}/checkpoints", s.checkpoints)
+	mux.HandleFunc("GET /v1/runs/{id}/transcript", s.transcript)
 	mux.HandleFunc("POST /v1/runs/{id}/control", s.control)
 	return mux
 }
@@ -144,6 +145,23 @@ func (s *Server) checkpoints(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"checkpoints": out})
+}
+
+// transcript returns the run's reasoning transcript so a caller can audit why it
+// behaved as it did. Default is structured JSON messages; ?format=text&level=
+// (final|steps|full) returns a rendered plaintext view instead.
+func (s *Server) transcript(w http.ResponseWriter, r *http.Request) {
+	msgs, err := s.mgr.Transcript(r.Context(), r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	if r.URL.Query().Get("format") == "text" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(pipeline.RenderTranscript(msgs, r.URL.Query().Get("level"))))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"messages": msgs})
 }
 
 func (s *Server) control(w http.ResponseWriter, r *http.Request) {

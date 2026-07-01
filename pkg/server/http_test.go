@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Misakaworstlv999/goforge/pkg/llm"
 	"github.com/Misakaworstlv999/goforge/pkg/pipeline"
 )
 
@@ -108,6 +109,30 @@ func TestServer_checkpointsRewindFork(t *testing.T) {
 	mgr.Wait(newID)
 	if st := get(t, srv.URL+"/v1/runs/"+newID); !strings.Contains(st, `"status":"completed"`) {
 		t.Errorf("forked run state = %q, want completed", st)
+	}
+}
+
+func TestServer_transcript(t *testing.T) {
+	mgr, store := fixture(t, nil)
+	srv := httptest.NewServer(New(mgr).Handler())
+	defer srv.Close()
+
+	post(t, srv.URL+"/v1/runs", `{"run_id":"tt","input":"hello"}`)
+	mgr.Wait("tt")
+	if err := store.AppendHistory(context.Background(), "tt", []llm.Message{
+		llm.UserMessage("hello"),
+		{Role: llm.RoleAssistant, Content: "hi there"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Structured JSON (default).
+	if body := get(t, srv.URL+"/v1/runs/tt/transcript"); !strings.Contains(body, "messages") || !strings.Contains(body, "hi there") {
+		t.Errorf("transcript json = %q", body)
+	}
+	// Rendered text at final level = just the last answer.
+	if body := get(t, srv.URL+"/v1/runs/tt/transcript?format=text&level=final"); strings.TrimSpace(body) != "hi there" {
+		t.Errorf("transcript text/final = %q, want \"hi there\"", body)
 	}
 }
 
