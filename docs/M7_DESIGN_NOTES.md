@@ -96,9 +96,25 @@ M7 把 Temporal 的「signal/query/durable run」与 LangGraph 的「checkpoint 
 
 ---
 
-## 7. 不在范围 / TODO
+## 7. 控制面的语义边界(重要,使用方须知)
+
+rewind/redirect/fork **恢复的是运行态,不是外部世界**。三者精确语义:
+
+- **redirect**:同一 run 在途改道到某 stage,**不重载状态**(保留当前黑板);目标 stage 拿到 `StageOutput` 作为输入。
+- **rewind**:同一 id,从某 checkpoint `seq` 重跑,**恢复该 seq 的黑板快照**(`runControlledFrom` → `State.Load(st.Blackboard)`),覆盖原前进态。
+- **fork**:同 rewind,但**新 id**,原 run 不动。
+
+上下文如何到达 LLM:每个 stage 的 agent 都是**现建**的(消息列表 = system + ContextPolicy.Sources + task),跨 stage 上下文**靠黑板 artifact,不靠对话历史**。因此 rewind/fork 恢复黑板 ⇒ 只要 stage 从黑板组装 prompt(M6 dev workflow / 通用 pipeline 皆如此),agent 就有连贯上下文。
+
+三个已知问题(① 已修,②③ 留档):
+
+- **① steer/rewind 指导必须被 stage 读入,否则对 LLM 无效 —— 已修。** OpSteer / rewind-note 写入黑板 `SteerKey`,但 stage 不读就等于没有。已提供 `SteerSource(state)`(control.go),通用 `agentPipeline` 已挂载;**自定义 RunAgent 类 stage 需在其 ContextPolicy 里 opt-in `SteerSource`**。测试 `TestSteerSource_reachesAgentPrompt` 证明指导进入 prompt。
+- **② rewind(同 id)不截断 durable history(TODO)。** history 按 id append-only;若 stage 用了 `HistorySource`,rewind 重跑会读到「旧 transcript + 新 transcript」叠加,反而更乱。**当前建议:用了 HistorySource 的 pipeline 优先 `fork`(新 id、history 从空)而非 `rewind`。** 后续可给 rewind 加逻辑分界(记录 rewind 点,HistorySource 只读该点之后)。见 `Manager.Rewind` 处 TODO。
+- **③ 不回滚文件系统等外部副作用(设计边界,非 bug)。** checkpoint 只快照 `PipelineState`(黑板 + FSM 位置),`write_file`/`exec_command` 改的是真实磁盘。rewind/fork 后**磁盘上已改的文件仍在**,重跑在"脏"工作区上继续;非幂等的文件操作可能二次叠加或基于错误状态规划。类似 Temporal:重放恢复工作流状态,不恢复它调用的外部世界。**干净重来需引擎外解决:fork 到独立 workdir / 幂等化 stage / 用 git 对工作区做外部快照。**
+
+## 8. 不在范围 / TODO
 
 - A2A、MCP-server(外部 agent 驱动我们的 run)—— 有具体外部集成需求再议。
-- per-tool 细粒度 span(当前是 tool-batch span;细粒度需在 Ring2 加 hook,记 TODO,避免污染 Ring2)。
+- per-tool 细粒度 span(当前是 tool-batch span;细粒度需在 Ring2 加 hook,避免污染 Ring2)。
 - 富并发冲突裁决、跨进程实时控制(单进程 Manager 起步;status/resume 经持久化 store 跨进程已够)。
 - Webhook(M7-002):产品向,留待集成需求。

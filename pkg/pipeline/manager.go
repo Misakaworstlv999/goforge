@@ -178,6 +178,14 @@ func (m *Manager) Checkpoints(ctx context.Context, runID string) ([]CheckpointIn
 // Rewind re-runs runID from an earlier checkpoint (time-travel): same id, a fresh
 // run driven from the state at seq, with optional guidance injected. Requires a
 // store with lineage (SaveStep).
+//
+// SEMANTIC LIMITS (see docs/M7_DESIGN_NOTES.md §7):
+//   - Rewind restores the blackboard + FSM position, NOT the filesystem or other
+//     external side effects — tool-written files persist across a rewind.
+//   - The durable history is append-only and is NOT truncated here, so a stage
+//     using HistorySource will see the pre-rewind transcript stacked before the
+//     re-run. Prefer Fork (fresh id, empty history) for HistorySource pipelines.
+//     TODO: record a rewind boundary so HistorySource can read only past it.
 func (m *Manager) Rewind(runID string, seq int, note string) error {
 	_, err := m.replay(runID, runID, seq, note)
 	return err

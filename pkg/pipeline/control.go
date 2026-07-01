@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Misakaworstlv999/goforge/pkg/agent"
 	"github.com/Misakaworstlv999/goforge/pkg/llm"
@@ -85,8 +86,54 @@ func (p *Pipeline) agentWaitResume(ctx context.Context, control <-chan Control) 
 
 // SteerKey is the shared-blackboard key under which OpSteer notes accumulate
 // (with AppendReducer). A stage that wants to honor live guidance reads it via a
-// ContextSource bound to this key.
+// ContextSource bound to this key — see SteerSource.
 const SteerKey = "steer"
+
+// SteerSource renders the accumulated steering guidance (SteerKey notes, from
+// OpSteer and from rewind/fork's injected note) as a read-only context message,
+// so a stage's agent actually HONORS operator guidance. Without a source like
+// this, steer/rewind notes sit unread on the blackboard and never reach the LLM.
+// Bind it into a RunAgent-based stage's ContextPolicy. Returns nil (injects
+// nothing) when there is no guidance.
+func SteerSource(st *State) agent.ContextSource {
+	return func(context.Context, string) ([]llm.Message, error) {
+		v, ok := st.Get(SteerKey)
+		if !ok {
+			return nil, nil
+		}
+		notes := toStringSlice(v)
+		if len(notes) == 0 {
+			return nil, nil
+		}
+		var b strings.Builder
+		b.WriteString("Operator guidance for this run (honor it):\n")
+		for _, n := range notes {
+			fmt.Fprintf(&b, "- %s\n", n)
+		}
+		return []llm.Message{llm.SystemMessage(b.String())}, nil
+	}
+}
+
+// toStringSlice normalizes a SteerKey value (accumulated as []any by AppendReducer,
+// or a bare string / []string) into a string slice.
+func toStringSlice(v any) []string {
+	switch t := v.(type) {
+	case []string:
+		return t
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, e := range t {
+			out = append(out, fmt.Sprintf("%v", e))
+		}
+		return out
+	case string:
+		return []string{t}
+	case nil:
+		return nil
+	default:
+		return []string{fmt.Sprintf("%v", v)}
+	}
+}
 
 // ControlOp is a steering operation applied to a running pipeline at a stage
 // safe point (between stages), preserving the one-stage-at-a-time determinism.

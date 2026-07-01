@@ -64,7 +64,11 @@ func agentPipeline(client llm.LLM, reg *tool.Registry, system string, store pipe
 	_ = pipeline.AddStage(p, pipeline.Stage[string, string]{
 		Name: "agent",
 		Run: func(ctx context.Context, task string, deps pipeline.StageDeps) (string, error) {
-			return pipeline.RunAgent(ctx, deps, task, system, agent.ContextPolicy{})
+			// Surface operator guidance (steer_run notes, rewind/fork notes) into
+			// the agent's prompt — otherwise those control ops would sit unread on
+			// the blackboard and never reach the LLM.
+			policy := agent.ContextPolicy{Sources: []agent.ContextSource{pipeline.SteerSource(deps.State)}}
+			return pipeline.RunAgent(ctx, deps, task, system, policy)
 		},
 	})
 	return p
