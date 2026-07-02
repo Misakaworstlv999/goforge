@@ -68,8 +68,11 @@ export OPENAI_API_KEY=sk-...            # or: ANTHROPIC_API_KEY
 # Interactive REPL (default — no subcommand)
 ./goforge -mode agent
 
-# Trigger one run and stream its events
+# Trigger one run and stream its events (default: a general ReAct-agent pipeline)
 ./goforge run "summarize the files in this directory"
+
+# Or drive the M6 dev workflow (requirement→design→coding→review→tests→acceptance)
+./goforge run -pipeline dev-workflow "add a health-check endpoint"
 
 # Start the HTTP control plane (persisted runs)
 ./goforge serve -http :8080 -store goforge.db

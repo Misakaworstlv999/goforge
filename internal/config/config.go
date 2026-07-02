@@ -94,6 +94,9 @@ type Config struct {
 	// analysis stages. Empty ⇒ no KM (the workflow runs without doc lookup). The
 	// concrete server name lives only in local config, never in tracked code.
 	KMServer string
+	// Pipeline selects which pipeline serve/run/resume drive: "agent" (a general
+	// single ReAct-agent pipeline, the default) or "dev-workflow" (the M6 graph).
+	Pipeline string
 }
 
 // Default values shared by Parse and tests.
@@ -133,6 +136,7 @@ const (
 	envLogLevel         = "GOFORGE_LOG_LEVEL"
 	envLogFormat        = "GOFORGE_LOG_FORMAT"
 	envKMServer         = "GOFORGE_KM_SERVER"
+	envPipeline         = "GOFORGE_PIPELINE"
 )
 
 const (
@@ -142,6 +146,10 @@ const (
 	// MCP tool exposure modes.
 	MCPExposeDirect = "direct"
 	MCPExposeBroker = "broker"
+
+	// Pipeline selection for serve/run/resume.
+	PipelineAgent       = "agent"
+	PipelineDevWorkflow = "dev-workflow"
 )
 
 // Parse builds a Config from CLI args and an environment lookup function, also
@@ -214,6 +222,7 @@ func parseConfig(args []string, getenv func(string) string, envPath string) (Con
 	fs.StringVar(&cfg.LogLevel, "log-level", defaultLogLevel, "Log level: debug | info | warn | error")
 	fs.StringVar(&cfg.LogFormat, "log-format", defaultLogFormat, "Log format: console | json")
 	fs.StringVar(&cfg.KMServer, "km-server", "", "mcpServers key of a knowledge-base MCP server for the dev-workflow analysis stages; empty = no KM")
+	fs.StringVar(&cfg.Pipeline, "pipeline", PipelineAgent, "Pipeline for serve/run/resume: agent | dev-workflow")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, nil, err
@@ -350,6 +359,14 @@ func parseConfig(args []string, getenv func(string) string, envPath string) (Con
 		if v := lookup(envKMServer); v != "" {
 			cfg.KMServer = v
 		}
+	}
+	if !set["pipeline"] {
+		if v := lookup(envPipeline); v != "" {
+			cfg.Pipeline = v
+		}
+	}
+	if cfg.Pipeline != PipelineAgent && cfg.Pipeline != PipelineDevWorkflow {
+		return Config{}, nil, fmt.Errorf("invalid -pipeline %q: want agent or dev-workflow", cfg.Pipeline)
 	}
 	if cfg.MCPExpose != MCPExposeDirect && cfg.MCPExpose != MCPExposeBroker {
 		return Config{}, nil, fmt.Errorf("invalid -mcp-expose %q: want direct or broker", cfg.MCPExpose)

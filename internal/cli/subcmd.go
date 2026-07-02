@@ -15,6 +15,7 @@ import (
 	"github.com/Misakaworstlv999/goforge/internal/config"
 	"github.com/Misakaworstlv999/goforge/internal/log"
 	"github.com/Misakaworstlv999/goforge/internal/telemetry"
+	"github.com/Misakaworstlv999/goforge/pkg/agent"
 	"github.com/Misakaworstlv999/goforge/pkg/llm"
 	"github.com/Misakaworstlv999/goforge/pkg/pipeline"
 	"github.com/Misakaworstlv999/goforge/pkg/server"
@@ -52,11 +53,36 @@ func openStore(cfg config.Config) (pipeline.CheckpointStore, io.Closer, error) {
 	return s, s, nil
 }
 
+// buildPipeline is the single factory shared by serve/run/resume, selected by
+// cfg.Pipeline. Routing all three through it means the stage graph never drifts
+// between triggering a run and resuming it.
+func buildPipeline(client llm.LLM, reg *tool.Registry, cfg config.Config, store pipeline.CheckpointStore) *pipeline.Pipeline {
+	if cfg.Pipeline == config.PipelineDevWorkflow {
+		return devWorkflowPipeline(client, reg, cfg, store)
+	}
+	return agentPipeline(client, reg, cfg, store)
+}
+
+// agentPipeline is the general control-plane unit of work: a single-stage ReAct
+// agent over the shared LLM + tools. Each call gets a fresh blackboard so runs
+// stay isolated. RunAgent auto-injects steering guidance, so steer/rewind reach
+// this agent too.
+func agentPipeline(client llm.LLM, reg *tool.Registry, cfg config.Config, store pipeline.CheckpointStore) *pipeline.Pipeline {
+	deps := pipeline.StageDeps{LLM: client, Registry: reg, State: pipeline.NewState(), MaxAgentSteps: cfg.MaxSteps}
+	p := pipeline.New(deps, pipeline.WithStore(store))
+	_ = pipeline.AddStage(p, pipeline.Stage[string, string]{
+		Name: "agent",
+		Run: func(ctx context.Context, task string, d pipeline.StageDeps) (string, error) {
+			return pipeline.RunAgent(ctx, d, task, cfg.System, agent.ContextPolicy{})
+		},
+	})
+	return p
+}
+
 // devWorkflowPipeline builds the M6 dev-workflow graph (requirement→design→coding→
 // review→tests→acceptance). A knowledge-base MCP server (cfg.KMServer, from the
 // mcpServers config) is scoped onto the analysis stages when configured; empty
-// KMServer runs the workflow without doc lookup. It is the single factory shared
-// by serve/run/resume so the stage graph never drifts between trigger and resume.
+// KMServer runs the workflow without doc lookup.
 func devWorkflowPipeline(client llm.LLM, reg *tool.Registry, cfg config.Config, store pipeline.CheckpointStore) *pipeline.Pipeline {
 	deps := pipeline.StageDeps{
 		LLM:           client,
@@ -116,7 +142,7 @@ func newServeServer(cfg config.Config, logger log.Logger) (*http.Server, func(),
 		return nil, nil, err
 	}
 	mgr := pipeline.NewManager(func(string) *pipeline.Pipeline {
-		return devWorkflowPipeline(client, reg, cfg, store)
+		return buildPipeline(client, reg, cfg, store)
 	})
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -236,7 +262,7 @@ func RunCmd(args []string) int {
 	defer func() { _ = storeCloser.Close() }()
 
 	mgr := pipeline.NewManager(func(string) *pipeline.Pipeline {
-		return devWorkflowPipeline(client, reg, cfg, store)
+		return buildPipeline(client, reg, cfg, store)
 	})
 	defer mgr.Close()
 	return streamRun(mgr, task, os.Stdout, os.Stderr)
@@ -337,6 +363,6 @@ func Resume(args []string) int {
 	reg, closers := BuildRegistry(context.Background(), cfg, os.Stderr)
 	defer closeAll(closers)
 
-	p := devWorkflowPipeline(client, reg, cfg, store)
+	p := buildPipeline(client, reg, cfg, store)
 	return streamResume(p, rest[0], true, os.Stdout, os.Stderr)
 }
