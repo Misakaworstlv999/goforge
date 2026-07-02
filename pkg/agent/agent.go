@@ -195,6 +195,7 @@ func (a *SimpleAgent) Run(ctx context.Context, task string) iter.Seq2[Event, err
 				return
 			}
 			telemetry.RecordLLMUsage(llmSpan, resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
+			telemetry.RecordLLMExchange(llmSpan, messages, resp.Message)
 			telemetry.End(llmSpan, nil)
 			lastUsage = resp.Usage.TotalTokens
 			record(resp.Message)
@@ -223,6 +224,7 @@ func (a *SimpleAgent) Run(ctx context.Context, task string) iter.Seq2[Event, err
 			// span (no-op unless telemetry is wired) covers the whole batch.
 			toolCtx, toolSpan := telemetry.StartTool(ctx, step, len(resp.Message.ToolCalls), toolCallNames(resp.Message.ToolCalls))
 			results := tool.ExecuteParallel(toolCtx, a.registry, resp.Message.ToolCalls, a.toolTimeout)
+			telemetry.RecordToolExchange(toolSpan, resp.Message.ToolCalls, results)
 			telemetry.End(toolSpan, nil)
 
 			// Observe: feed every result back into the conversation.

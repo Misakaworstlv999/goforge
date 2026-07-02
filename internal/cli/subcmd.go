@@ -15,11 +15,11 @@ import (
 	"github.com/Misakaworstlv999/goforge/internal/config"
 	"github.com/Misakaworstlv999/goforge/internal/log"
 	"github.com/Misakaworstlv999/goforge/internal/telemetry"
-	"github.com/Misakaworstlv999/goforge/pkg/agent"
 	"github.com/Misakaworstlv999/goforge/pkg/llm"
 	"github.com/Misakaworstlv999/goforge/pkg/pipeline"
 	"github.com/Misakaworstlv999/goforge/pkg/server"
 	"github.com/Misakaworstlv999/goforge/pkg/tool"
+	"github.com/Misakaworstlv999/goforge/pkg/workflow"
 )
 
 // This file holds the non-interactive subcommands that expose the M7 control
@@ -52,26 +52,19 @@ func openStore(cfg config.Config) (pipeline.CheckpointStore, io.Closer, error) {
 	return s, s, nil
 }
 
-// agentPipeline builds the unit of work the control plane drives: a single-stage
-// pipeline that runs a ReAct agent over the shared LLM client and tool registry,
-// persisting to store. Each call creates a fresh blackboard (State) so concurrent
-// runs stay isolated; client and registry are read-only and safely shared.
-func agentPipeline(client llm.LLM, reg *tool.Registry, system string, store pipeline.CheckpointStore) *pipeline.Pipeline {
-	p := pipeline.New(
-		pipeline.StageDeps{LLM: client, Registry: reg, State: pipeline.NewState()},
-		pipeline.WithStore(store),
-	)
-	_ = pipeline.AddStage(p, pipeline.Stage[string, string]{
-		Name: "agent",
-		Run: func(ctx context.Context, task string, deps pipeline.StageDeps) (string, error) {
-			// Surface operator guidance (steer_run notes, rewind/fork notes) into
-			// the agent's prompt — otherwise those control ops would sit unread on
-			// the blackboard and never reach the LLM.
-			policy := agent.ContextPolicy{Sources: []agent.ContextSource{pipeline.SteerSource(deps.State)}}
-			return pipeline.RunAgent(ctx, deps, task, system, policy)
-		},
-	})
-	return p
+// devWorkflowPipeline builds the M6 dev-workflow graph (requirement→design→coding→
+// review→tests→acceptance). A knowledge-base MCP server (cfg.KMServer, from the
+// mcpServers config) is scoped onto the analysis stages when configured; empty
+// KMServer runs the workflow without doc lookup. It is the single factory shared
+// by serve/run/resume so the stage graph never drifts between trigger and resume.
+func devWorkflowPipeline(client llm.LLM, reg *tool.Registry, cfg config.Config, store pipeline.CheckpointStore) *pipeline.Pipeline {
+	deps := pipeline.StageDeps{
+		LLM:           client,
+		Registry:      reg,
+		State:         pipeline.NewState(),
+		MaxAgentSteps: cfg.MaxSteps,
+	}
+	return workflow.BuildDevWorkflow(deps, workflow.Config{KMMCPServer: cfg.KMServer}, pipeline.WithStore(store))
 }
 
 func closeAll(cs []io.Closer) {
@@ -96,10 +89,16 @@ func printEvent(w io.Writer, e pipeline.Event) {
 // initTelemetry wires OTLP export per cfg and returns a shutdown func. With no
 // endpoint configured it is a no-op (telemetry stays disabled, zero overhead).
 func initTelemetry(cfg config.Config) (func(context.Context) error, error) {
+	bodyMode, err := telemetry.ParseBodyCapture(cfg.OTelBody)
+	if err != nil {
+		return nil, err
+	}
 	return telemetry.Init(context.Background(), telemetry.Options{
-		Endpoint:    cfg.OTelEndpoint,
-		Insecure:    cfg.OTelInsecure,
-		ServiceName: cfg.ServiceName,
+		Endpoint:     cfg.OTelEndpoint,
+		Insecure:     cfg.OTelInsecure,
+		ServiceName:  cfg.ServiceName,
+		BodyCapture:  bodyMode,
+		BodyMaxBytes: cfg.OTelBodyMaxBytes,
 	})
 }
 
@@ -117,7 +116,7 @@ func newServeServer(cfg config.Config, logger log.Logger) (*http.Server, func(),
 		return nil, nil, err
 	}
 	mgr := pipeline.NewManager(func(string) *pipeline.Pipeline {
-		return agentPipeline(client, reg, cfg.System, store)
+		return devWorkflowPipeline(client, reg, cfg, store)
 	})
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -237,7 +236,7 @@ func RunCmd(args []string) int {
 	defer func() { _ = storeCloser.Close() }()
 
 	mgr := pipeline.NewManager(func(string) *pipeline.Pipeline {
-		return agentPipeline(client, reg, cfg.System, store)
+		return devWorkflowPipeline(client, reg, cfg, store)
 	})
 	defer mgr.Close()
 	return streamRun(mgr, task, os.Stdout, os.Stderr)
@@ -338,6 +337,6 @@ func Resume(args []string) int {
 	reg, closers := BuildRegistry(context.Background(), cfg, os.Stderr)
 	defer closeAll(closers)
 
-	p := agentPipeline(client, reg, cfg.System, store)
+	p := devWorkflowPipeline(client, reg, cfg, store)
 	return streamResume(p, rest[0], true, os.Stdout, os.Stderr)
 }

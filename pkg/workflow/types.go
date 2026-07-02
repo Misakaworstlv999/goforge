@@ -10,10 +10,26 @@
 package workflow
 
 import (
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"strings"
 )
+
+func init() {
+	// Blackboard artifacts must be registered so pipeline checkpoint gob encoding
+	// succeeds after requirement/techdesign/coding stages persist typed values.
+	gob.Register(Spec{})
+	gob.Register(Design{})
+	gob.Register(CodeChange{})
+	gob.Register(TestReport{})
+	gob.Register(AcceptancePoint{})
+	gob.Register(AcceptanceKind(0))
+	gob.Register(AcceptanceStatus(0))
+	gob.Register(LayerResult{})
+	gob.Register([]AcceptancePoint(nil))
+	gob.Register([]LayerResult(nil))
+}
 
 // AcceptanceKind is the test layer that proves an acceptance point.
 type AcceptanceKind int
@@ -175,18 +191,80 @@ func acceptanceReducer(old, new any) any {
 	return out
 }
 
-// decodeJSON extracts the first JSON object from s (tolerating Markdown fences or
-// surrounding prose, as LLMs commonly emit) and unmarshals it into T.
+// extractJSONObject returns the balanced {...} substring starting at start, or
+// false when braces are unbalanced. String literals are respected so prose like
+// api/{service}/{service}.proto does not swallow a later real JSON object.
+func extractJSONObject(s string, start int) (string, bool) {
+	if start < 0 || start >= len(s) || s[start] != '{' {
+		return "", false
+	}
+	depth := 0
+	inString := false
+	escape := false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if escape {
+			escape = false
+			continue
+		}
+		if inString {
+			if c == '\\' {
+				escape = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[start : i+1], true
+			}
+		}
+	}
+	return "", false
+}
+
+// decodeJSON extracts a JSON object from s (tolerating Markdown fences or
+// surrounding prose, as LLMs commonly emit) and unmarshals it into T. When
+// multiple objects appear, the longest substring that unmarshals into T wins —
+// this skips brace placeholders like {service} and nested fragments inside a
+// larger payload.
 func decodeJSON[T any](s string) (T, error) {
 	var zero T
-	start := strings.IndexByte(s, '{')
-	end := strings.LastIndexByte(s, '}')
-	if start < 0 || end < start {
-		return zero, fmt.Errorf("no JSON object found in output")
+	var found T
+	var ok bool
+	var bestLen int
+	var lastErr error
+	for i := 0; i < len(s); i++ {
+		if s[i] != '{' {
+			continue
+		}
+		chunk, complete := extractJSONObject(s, i)
+		if !complete {
+			continue
+		}
+		var out T
+		if err := json.Unmarshal([]byte(chunk), &out); err != nil {
+			lastErr = err
+			continue
+		}
+		if !ok || len(chunk) > bestLen {
+			found = out
+			bestLen = len(chunk)
+			ok = true
+		}
 	}
-	var out T
-	if err := json.Unmarshal([]byte(s[start:end+1]), &out); err != nil {
-		return zero, fmt.Errorf("decoding JSON output: %w", err)
+	if ok {
+		return found, nil
 	}
-	return out, nil
+	if lastErr != nil {
+		return zero, fmt.Errorf("decoding JSON output: %w", lastErr)
+	}
+	return zero, fmt.Errorf("no JSON object found in output")
 }

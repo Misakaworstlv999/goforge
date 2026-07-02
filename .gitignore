@@ -50,6 +50,10 @@ mcp.json
 *.db-wal
 *.db-shm
 
+# Runtime logs (e.g. goforge.log from `goforge serve`/`run`) — may contain
+# transcripts / internal endpoints; never commit.
+*.log
+
 # Cursor / agent artifacts (local only)
 .cursor/
 session-handoff.md

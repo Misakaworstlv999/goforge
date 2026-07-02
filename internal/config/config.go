@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Misakaworstlv999/goforge/internal/telemetry"
 )
 
 // Mode selects which interactive behavior the CLI runs. The three modes map to
@@ -81,45 +83,58 @@ type Config struct {
 	OTelInsecure bool
 	// ServiceName is the service.name resource attribute for telemetry.
 	ServiceName string
+	// OTelBody controls span payload capture: off | preview | full (default off).
+	OTelBody string
+	// OTelBodyMaxBytes caps captured body attributes (default 2048).
+	OTelBodyMaxBytes int
 	// LogLevel is the minimum structured-log level: debug|info|warn|error.
 	LogLevel string
 	// LogFormat selects the log encoding: console|json.
 	LogFormat string
+	// KMServer is the mcpServers key (from the MCP config) of a knowledge-base
+	// MCP server whose doc-search tools are scoped onto the dev-workflow's
+	// analysis stages. Empty ⇒ no KM (the workflow runs without doc lookup). The
+	// concrete server name lives only in local config, never in tracked code.
+	KMServer string
 }
 
 // Default values shared by Parse and tests.
 const (
-	defaultSystem      = "You are a helpful assistant. You can use tools when needed."
-	defaultMaxSteps    = 10
-	defaultToolTimeout = 30 * time.Second
-	defaultEnvFile     = ".env"
-	defaultHTTPAddr    = ":8080"
-	defaultServiceName = "goforge"
-	defaultLogLevel    = "info"
-	defaultLogFormat   = "console"
+	defaultSystem           = "You are a helpful assistant. You can use tools when needed."
+	defaultMaxSteps         = 10
+	defaultToolTimeout      = 30 * time.Second
+	defaultEnvFile          = ".env"
+	defaultHTTPAddr         = ":8080"
+	defaultServiceName      = "goforge"
+	defaultOTelBodyMaxBytes = 2048
+	defaultLogLevel         = "info"
+	defaultLogFormat        = "console"
 )
 
 // Environment variable names. Non-secret app settings use a GOFORGE_ prefix;
 // API keys keep their conventional provider-specific names.
 const (
-	envProvider      = "GOFORGE_PROVIDER"
-	envModel         = "GOFORGE_MODEL"
-	envBaseURL       = "GOFORGE_BASE_URL"
-	envSystem        = "GOFORGE_SYSTEM"
-	envMode          = "GOFORGE_MODE"
-	envMaxSteps      = "GOFORGE_MAX_STEPS"
-	envToolTimeout   = "GOFORGE_TOOL_TIMEOUT"
-	envWorkdir       = "GOFORGE_WORKDIR"
-	envAllowCommands = "GOFORGE_ALLOW_COMMANDS"
-	envMCPConfig     = "GOFORGE_MCP_CONFIG"
-	envMCPExpose     = "GOFORGE_MCP_EXPOSE"
-	envHTTPAddr      = "GOFORGE_HTTP_ADDR"
-	envStore         = "GOFORGE_STORE"
-	envOTelEndpoint  = "GOFORGE_OTEL_ENDPOINT"
-	envOTelInsecure  = "GOFORGE_OTEL_INSECURE"
-	envServiceName   = "GOFORGE_SERVICE_NAME"
-	envLogLevel      = "GOFORGE_LOG_LEVEL"
-	envLogFormat     = "GOFORGE_LOG_FORMAT"
+	envProvider         = "GOFORGE_PROVIDER"
+	envModel            = "GOFORGE_MODEL"
+	envBaseURL          = "GOFORGE_BASE_URL"
+	envSystem           = "GOFORGE_SYSTEM"
+	envMode             = "GOFORGE_MODE"
+	envMaxSteps         = "GOFORGE_MAX_STEPS"
+	envToolTimeout      = "GOFORGE_TOOL_TIMEOUT"
+	envWorkdir          = "GOFORGE_WORKDIR"
+	envAllowCommands    = "GOFORGE_ALLOW_COMMANDS"
+	envMCPConfig        = "GOFORGE_MCP_CONFIG"
+	envMCPExpose        = "GOFORGE_MCP_EXPOSE"
+	envHTTPAddr         = "GOFORGE_HTTP_ADDR"
+	envStore            = "GOFORGE_STORE"
+	envOTelEndpoint     = "GOFORGE_OTEL_ENDPOINT"
+	envOTelInsecure     = "GOFORGE_OTEL_INSECURE"
+	envServiceName      = "GOFORGE_SERVICE_NAME"
+	envOTelBody         = "GOFORGE_OTEL_BODY"
+	envOTelBodyMaxBytes = "GOFORGE_OTEL_BODY_MAX_BYTES"
+	envLogLevel         = "GOFORGE_LOG_LEVEL"
+	envLogFormat        = "GOFORGE_LOG_FORMAT"
+	envKMServer         = "GOFORGE_KM_SERVER"
 )
 
 const (
@@ -196,8 +211,11 @@ func parseConfig(args []string, getenv func(string) string, envPath string) (Con
 	fs.StringVar(&cfg.OTelEndpoint, "otel-endpoint", "", "OTLP collector endpoint (host:port); empty = telemetry disabled")
 	fs.BoolVar(&cfg.OTelInsecure, "otel-insecure", false, "Send OTLP over plaintext (no TLS)")
 	fs.StringVar(&cfg.ServiceName, "service-name", defaultServiceName, "service.name resource attribute for telemetry")
+	fs.StringVar(&cfg.OTelBody, "otel-body", "", "Capture LLM/tool payloads on spans: off | preview | full")
+	fs.IntVar(&cfg.OTelBodyMaxBytes, "otel-body-max-bytes", defaultOTelBodyMaxBytes, "Max bytes per captured span body attribute")
 	fs.StringVar(&cfg.LogLevel, "log-level", defaultLogLevel, "Log level: debug | info | warn | error")
 	fs.StringVar(&cfg.LogFormat, "log-format", defaultLogFormat, "Log format: console | json")
+	fs.StringVar(&cfg.KMServer, "km-server", "", "mcpServers key of a knowledge-base MCP server for the dev-workflow analysis stages; empty = no KM")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, nil, err
@@ -300,6 +318,26 @@ func parseConfig(args []string, getenv func(string) string, envPath string) (Con
 			cfg.ServiceName = v
 		}
 	}
+	if !set["otel-body"] {
+		if v := lookup(envOTelBody); v != "" {
+			cfg.OTelBody = v
+		}
+	}
+	if !set["otel-body-max-bytes"] {
+		if v := lookup(envOTelBodyMaxBytes); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return Config{}, nil, fmt.Errorf("invalid %s %q: %w", envOTelBodyMaxBytes, v, err)
+			}
+			cfg.OTelBodyMaxBytes = n
+		}
+	}
+	if cfg.OTelBodyMaxBytes == 0 {
+		cfg.OTelBodyMaxBytes = defaultOTelBodyMaxBytes
+	}
+	if _, err := telemetry.ParseBodyCapture(cfg.OTelBody); err != nil {
+		return Config{}, nil, err
+	}
 	if !set["log-level"] {
 		if v := lookup(envLogLevel); v != "" {
 			cfg.LogLevel = v
@@ -308,6 +346,11 @@ func parseConfig(args []string, getenv func(string) string, envPath string) (Con
 	if !set["log-format"] {
 		if v := lookup(envLogFormat); v != "" {
 			cfg.LogFormat = v
+		}
+	}
+	if !set["km-server"] {
+		if v := lookup(envKMServer); v != "" {
+			cfg.KMServer = v
 		}
 	}
 	if cfg.MCPExpose != MCPExposeDirect && cfg.MCPExpose != MCPExposeBroker {

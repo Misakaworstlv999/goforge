@@ -44,6 +44,8 @@ type StageDeps struct {
 	// granularity. RunAgent wires it in so pause/steer/cancel/redirect take effect
 	// between reasoning steps, not only between stages. nil ⇒ none.
 	Interrupt agent.Interrupt
+	// MaxAgentSteps caps each RunAgent ReAct loop (0 ⇒ agent default, 10).
+	MaxAgentSteps int
 }
 
 // Stage is one typed node in the pipeline. In is the stage's input (the previous
@@ -272,6 +274,9 @@ func RunAgent(ctx context.Context, deps StageDeps, task, system string, policy a
 	}
 	if deps.Interrupt != nil {
 		opts = append(opts, agent.WithInterrupt(deps.Interrupt))
+	}
+	if deps.MaxAgentSteps > 0 {
+		opts = append(opts, agent.WithMaxSteps(deps.MaxAgentSteps))
 	}
 	a := agent.New(deps.LLM, reg, opts...)
 	var final string

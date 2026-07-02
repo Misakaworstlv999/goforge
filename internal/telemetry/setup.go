@@ -24,6 +24,10 @@ type Options struct {
 	Insecure bool
 	// ServiceName is the service.name resource attribute.
 	ServiceName string
+	// BodyCapture attaches truncated LLM/tool payloads to spans (off by default).
+	BodyCapture BodyCapture
+	// BodyMaxBytes caps preview/full body attributes (default 2048; full mode up to 256KiB).
+	BodyMaxBytes int
 }
 
 // Init wires OTLP trace + metric exporters into the global OTel providers and
@@ -33,6 +37,7 @@ type Options struct {
 // This is what keeps "telemetry unconfigured" identical to today's behavior.
 func Init(ctx context.Context, opts Options) (func(context.Context) error, error) {
 	noop := func(context.Context) error { return nil }
+	configureBodyCapture(opts.BodyCapture, opts.BodyMaxBytes)
 	if opts.Endpoint == "" {
 		return noop, nil
 	}
