@@ -142,8 +142,27 @@ provider). Point it at an OTLP collector to turn it on:
 ./goforge serve -otel-endpoint localhost:4318 -otel-insecure -service-name goforge
 ```
 
-Spans are emitted at pipeline-stage, LLM-call (with token usage), and tool-batch
-boundaries, nested via `context`. Structured logs use `zap`
+**Traces** — spans at pipeline-stage, LLM-call (with token usage), and tool-batch
+boundaries, nested via `context`.
+
+**Metrics** — `gen_ai.client.token.usage` (input/output), `gen_ai.client.operation.duration`,
+`gen_ai.client.request.count`, and `goforge.pipeline.stage.duration`.
+
+Both are exported over OTLP/HTTP to the same `-otel-endpoint`. Note the backend
+split: **Jaeger ingests traces only** — to see the metrics you need a metrics
+backend (e.g. Prometheus) behind an OpenTelemetry Collector that fans OTLP out to
+both. A minimal setup:
+
+```bash
+# Traces only (quick): Jaeger all-in-one accepts OTLP on :4318
+docker run -d -p 16686:16686 -p 4318:4318 jaegertracing/all-in-one:latest
+
+# Traces + metrics: run an OTel Collector on :4318 with an otlp receiver that
+# exports traces → Jaeger and metrics → Prometheus (see the Collector docs).
+```
+
+Optionally attach LLM/tool payload previews to spans with
+`-otel-body {off|preview|full}` (off by default). Structured logs use `zap`
 (`-log-level`, `-log-format {console|json}`). The OTLP endpoint is read only from
 flag/env — it is never hardcoded.
 
