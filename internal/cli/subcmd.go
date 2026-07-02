@@ -17,6 +17,7 @@ import (
 	"github.com/Misakaworstlv999/goforge/internal/telemetry"
 	"github.com/Misakaworstlv999/goforge/pkg/agent"
 	"github.com/Misakaworstlv999/goforge/pkg/llm"
+	"github.com/Misakaworstlv999/goforge/pkg/memory"
 	"github.com/Misakaworstlv999/goforge/pkg/pipeline"
 	"github.com/Misakaworstlv999/goforge/pkg/server"
 	"github.com/Misakaworstlv999/goforge/pkg/tool"
@@ -56,27 +57,57 @@ func openStore(cfg config.Config) (pipeline.CheckpointStore, io.Closer, error) {
 // buildPipeline is the single factory shared by serve/run/resume, selected by
 // cfg.Pipeline. Routing all three through it means the stage graph never drifts
 // between triggering a run and resuming it.
-func buildPipeline(client llm.LLM, reg *tool.Registry, cfg config.Config, store pipeline.CheckpointStore) *pipeline.Pipeline {
+func buildPipeline(client llm.LLM, reg *tool.Registry, cfg config.Config, store pipeline.CheckpointStore, mem *memory.Store) *pipeline.Pipeline {
 	if cfg.Pipeline == config.PipelineDevWorkflow {
 		return devWorkflowPipeline(client, reg, cfg, store)
 	}
-	return agentPipeline(client, reg, cfg, store)
+	return agentPipeline(client, reg, cfg, store, mem)
 }
 
 // agentPipeline is the general control-plane unit of work: a single-stage ReAct
 // agent over the shared LLM + tools. Each call gets a fresh blackboard so runs
 // stay isolated. RunAgent auto-injects steering guidance, so steer/rewind reach
-// this agent too.
-func agentPipeline(client llm.LLM, reg *tool.Registry, cfg config.Config, store pipeline.CheckpointStore) *pipeline.Pipeline {
+// this agent too. When memory is enabled in "source"/"both" mode, it also injects
+// relevant long-term memory ahead of the task.
+func agentPipeline(client llm.LLM, reg *tool.Registry, cfg config.Config, store pipeline.CheckpointStore, mem *memory.Store) *pipeline.Pipeline {
 	deps := pipeline.StageDeps{LLM: client, Registry: reg, State: pipeline.NewState(), MaxAgentSteps: cfg.MaxSteps}
 	p := pipeline.New(deps, pipeline.WithStore(store))
 	_ = pipeline.AddStage(p, pipeline.Stage[string, string]{
 		Name: "agent",
 		Run: func(ctx context.Context, task string, d pipeline.StageDeps) (string, error) {
-			return pipeline.RunAgent(ctx, d, task, cfg.System, agent.ContextPolicy{})
+			var policy agent.ContextPolicy
+			if mem != nil && (cfg.MemoryMode == config.MemoryModeSource || cfg.MemoryMode == config.MemoryModeBoth) {
+				policy.Sources = append(policy.Sources, memory.Source(mem, cfg.MemoryNamespace, cfg.MemoryTopK))
+			}
+			return pipeline.RunAgent(ctx, d, task, cfg.System, policy)
 		},
 	})
 	return p
+}
+
+// setupMemory opens the persistent memory store when GOFORGE_MEMORY_PATH is set
+// (nil + no-op closer when disabled), and registers the memory tools into reg per
+// cfg.MemoryMode. Registration happens ONCE here (not per-run), since reg is
+// shared across runs.
+func setupMemory(cfg config.Config, reg *tool.Registry) (*memory.Store, io.Closer, error) {
+	if cfg.MemoryPath == "" {
+		return nil, nopCloser{}, nil
+	}
+	vs, err := memory.OpenSQLiteStore(cfg.MemoryPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	store := memory.NewStore(
+		memory.NewOpenAIEmbedder(memory.EmbedderConfig{APIKey: cfg.APIKey, BaseURL: cfg.BaseURL, Model: cfg.EmbedModel}),
+		vs,
+	)
+	if cfg.MemoryMode == config.MemoryModeTools || cfg.MemoryMode == config.MemoryModeBoth {
+		if err := reg.Register(memory.MemoryTools(store, cfg.MemoryNamespace)...); err != nil {
+			_ = vs.Close()
+			return nil, nil, err
+		}
+	}
+	return store, vs, nil
 }
 
 // devWorkflowPipeline builds the M6 dev-workflow graph (requirement→design→coding→
@@ -141,8 +172,14 @@ func newServeServer(cfg config.Config, logger log.Logger) (*http.Server, func(),
 		closeAll(closers)
 		return nil, nil, err
 	}
+	mem, memCloser, err := setupMemory(cfg, reg)
+	if err != nil {
+		_ = storeCloser.Close()
+		closeAll(closers)
+		return nil, nil, err
+	}
 	mgr := pipeline.NewManager(func(string) *pipeline.Pipeline {
-		return buildPipeline(client, reg, cfg, store)
+		return buildPipeline(client, reg, cfg, store, mem)
 	})
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -151,6 +188,7 @@ func newServeServer(cfg config.Config, logger log.Logger) (*http.Server, func(),
 	}
 	cleanup := func() {
 		mgr.Close()
+		_ = memCloser.Close()
 		_ = storeCloser.Close()
 		closeAll(closers)
 	}
@@ -260,9 +298,15 @@ func RunCmd(args []string) int {
 		return 1
 	}
 	defer func() { _ = storeCloser.Close() }()
+	mem, memCloser, err := setupMemory(cfg, reg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer func() { _ = memCloser.Close() }()
 
 	mgr := pipeline.NewManager(func(string) *pipeline.Pipeline {
-		return buildPipeline(client, reg, cfg, store)
+		return buildPipeline(client, reg, cfg, store, mem)
 	})
 	defer mgr.Close()
 	return streamRun(mgr, task, os.Stdout, os.Stderr)
@@ -362,7 +406,13 @@ func Resume(args []string) int {
 	client := NewLLM(cfg)
 	reg, closers := BuildRegistry(context.Background(), cfg, os.Stderr)
 	defer closeAll(closers)
+	mem, memCloser, err := setupMemory(cfg, reg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer func() { _ = memCloser.Close() }()
 
-	p := buildPipeline(client, reg, cfg, store)
+	p := buildPipeline(client, reg, cfg, store, mem)
 	return streamResume(p, rest[0], true, os.Stdout, os.Stderr)
 }

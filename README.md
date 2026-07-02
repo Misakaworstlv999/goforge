@@ -169,6 +169,24 @@ Optionally attach LLM/tool payload previews to spans with
 (`-log-level`, `-log-format {console|json}`). The OTLP endpoint is read only from
 flag/env — it is never hardcoded.
 
+## Long-term memory (opt-in)
+
+Off by default. Point `-memory` at a SQLite path to give the agent **cross-run
+semantic memory** — text is embedded and stored, and relevant memories are
+recalled by meaning in future runs (distinct from the checkpoint store, which
+restores a specific run by id):
+
+```bash
+./goforge run -memory goforge-mem.db "remember: deploys go out on Fridays"
+./goforge run -memory goforge-mem.db "when do we deploy?"   # recalls the note
+```
+
+The embedder is a remote OpenAI-compatible model (`-embed-model`, no local model,
+no CGO); the vector store is pure-Go SQLite (persistent). `-memory-mode` selects
+delivery: `source` (auto-inject relevant memory before the task), `tools`
+(`memory_search`/`memory_add` for the agent to call), or `both` (default).
+`-memory-namespace` scopes memory per project.
+
 ## Project layout
 
 ```
@@ -181,6 +199,7 @@ pkg/llm            Ring 1: LLM client + providers
 pkg/tool           Ring 2: tool registry, schema, executor, MCP client
 pkg/agent          Ring 3: ReAct agent
 pkg/pipeline       Ring 4: pipeline FSM + control plane + checkpoint store
+pkg/memory         Long-term semantic memory: embeddings + vector store + retrieval
 pkg/server         Ring 5: HTTP + SSE control-plane API
 docs/              architecture & design research notes
 ```

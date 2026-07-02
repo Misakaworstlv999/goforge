@@ -97,6 +97,22 @@ type Config struct {
 	// Pipeline selects which pipeline serve/run/resume drive: "agent" (a general
 	// single ReAct-agent pipeline, the default) or "dev-workflow" (the M6 graph).
 	Pipeline string
+
+	// --- Long-term memory (M8). Empty MemoryPath ⇒ memory disabled (zero-value
+	// behavior unchanged). ---
+
+	// MemoryPath is the SQLite path for the persistent vector store. Empty ⇒
+	// memory disabled.
+	MemoryPath string
+	// MemoryNamespace scopes stored/retrieved memory (e.g. per project).
+	MemoryNamespace string
+	// EmbedModel is the embedding model for memory (OpenAI-compatible).
+	EmbedModel string
+	// MemoryTopK caps how many memories are recalled per query.
+	MemoryTopK int
+	// MemoryMode selects how memory reaches the agent: "source" (auto-inject),
+	// "tools" (memory_search/add), or "both".
+	MemoryMode string
 }
 
 // Default values shared by Parse and tests.
@@ -137,6 +153,11 @@ const (
 	envLogFormat        = "GOFORGE_LOG_FORMAT"
 	envKMServer         = "GOFORGE_KM_SERVER"
 	envPipeline         = "GOFORGE_PIPELINE"
+	envMemoryPath       = "GOFORGE_MEMORY_PATH"
+	envMemoryNamespace  = "GOFORGE_MEMORY_NAMESPACE"
+	envEmbedModel       = "GOFORGE_EMBED_MODEL"
+	envMemoryTopK       = "GOFORGE_MEMORY_TOPK"
+	envMemoryMode       = "GOFORGE_MEMORY_MODE"
 )
 
 const (
@@ -150,6 +171,16 @@ const (
 	// Pipeline selection for serve/run/resume.
 	PipelineAgent       = "agent"
 	PipelineDevWorkflow = "dev-workflow"
+
+	// Memory delivery modes.
+	MemoryModeSource = "source"
+	MemoryModeTools  = "tools"
+	MemoryModeBoth   = "both"
+
+	defaultMemoryNamespace = "default"
+	defaultEmbedModel      = "text-embedding-3-small"
+	defaultMemoryTopK      = 5
+	defaultMemoryMode      = MemoryModeBoth
 )
 
 // Parse builds a Config from CLI args and an environment lookup function, also
@@ -223,6 +254,11 @@ func parseConfig(args []string, getenv func(string) string, envPath string) (Con
 	fs.StringVar(&cfg.LogFormat, "log-format", defaultLogFormat, "Log format: console | json")
 	fs.StringVar(&cfg.KMServer, "km-server", "", "mcpServers key of a knowledge-base MCP server for the dev-workflow analysis stages; empty = no KM")
 	fs.StringVar(&cfg.Pipeline, "pipeline", PipelineAgent, "Pipeline for serve/run/resume: agent | dev-workflow")
+	fs.StringVar(&cfg.MemoryPath, "memory", "", "SQLite path for long-term memory; empty = memory disabled")
+	fs.StringVar(&cfg.MemoryNamespace, "memory-namespace", defaultMemoryNamespace, "Namespace scoping stored/recalled memory")
+	fs.StringVar(&cfg.EmbedModel, "embed-model", defaultEmbedModel, "Embedding model for memory (OpenAI-compatible)")
+	fs.IntVar(&cfg.MemoryTopK, "memory-topk", defaultMemoryTopK, "Max memories recalled per query")
+	fs.StringVar(&cfg.MemoryMode, "memory-mode", defaultMemoryMode, "How memory reaches the agent: source | tools | both")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, nil, err
@@ -367,6 +403,38 @@ func parseConfig(args []string, getenv func(string) string, envPath string) (Con
 	}
 	if cfg.Pipeline != PipelineAgent && cfg.Pipeline != PipelineDevWorkflow {
 		return Config{}, nil, fmt.Errorf("invalid -pipeline %q: want agent or dev-workflow", cfg.Pipeline)
+	}
+	if !set["memory"] {
+		if v := lookup(envMemoryPath); v != "" {
+			cfg.MemoryPath = v
+		}
+	}
+	if !set["memory-namespace"] {
+		if v := lookup(envMemoryNamespace); v != "" {
+			cfg.MemoryNamespace = v
+		}
+	}
+	if !set["embed-model"] {
+		if v := lookup(envEmbedModel); v != "" {
+			cfg.EmbedModel = v
+		}
+	}
+	if !set["memory-topk"] {
+		if v := lookup(envMemoryTopK); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return Config{}, nil, fmt.Errorf("invalid %s %q: %w", envMemoryTopK, v, err)
+			}
+			cfg.MemoryTopK = n
+		}
+	}
+	if !set["memory-mode"] {
+		if v := lookup(envMemoryMode); v != "" {
+			cfg.MemoryMode = v
+		}
+	}
+	if cfg.MemoryMode != MemoryModeSource && cfg.MemoryMode != MemoryModeTools && cfg.MemoryMode != MemoryModeBoth {
+		return Config{}, nil, fmt.Errorf("invalid -memory-mode %q: want source, tools, or both", cfg.MemoryMode)
 	}
 	if cfg.MCPExpose != MCPExposeDirect && cfg.MCPExpose != MCPExposeBroker {
 		return Config{}, nil, fmt.Errorf("invalid -mcp-expose %q: want direct or broker", cfg.MCPExpose)
