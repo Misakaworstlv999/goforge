@@ -40,9 +40,10 @@ func TestSteerSource_reachesAgentPrompt(t *testing.T) {
 
 	cap := &captureLLM{}
 	deps := StageDeps{LLM: cap, Registry: tool.NewRegistry(), State: st}
-	policy := agent.ContextPolicy{Sources: []agent.ContextSource{SteerSource(st)}}
 
-	if _, err := RunAgent(context.Background(), deps, "do the task", "system prompt", policy); err != nil {
+	// Empty policy: RunAgent must auto-inject SteerSource so every stage honors
+	// steering without opting in.
+	if _, err := RunAgent(context.Background(), deps, "do the task", "system prompt", agent.ContextPolicy{}); err != nil {
 		t.Fatal(err)
 	}
 

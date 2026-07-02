@@ -187,15 +187,19 @@ func (a *SimpleAgent) Run(ctx context.Context, task string) iter.Seq2[Event, err
 
 			// LLM span (no-op unless telemetry.Init wired a provider). Nests under
 			// the pipeline stage span when the agent runs inside a pipeline.
+			llmStart := time.Now()
 			llmCtx, llmSpan := telemetry.StartLLM(ctx, a.model, step)
 			resp, err := a.llm.Chat(llmCtx, messages, chatOpts...)
+			llmDur := time.Since(llmStart)
 			if err != nil {
 				telemetry.End(llmSpan, err)
+				telemetry.RecordLLMMetrics(ctx, a.model, 0, 0, llmDur)
 				yield(ErrorEvent(err, step), err)
 				return
 			}
 			telemetry.RecordLLMUsage(llmSpan, resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
 			telemetry.RecordLLMExchange(llmSpan, messages, resp.Message)
+			telemetry.RecordLLMMetrics(ctx, a.model, resp.Usage.PromptTokens, resp.Usage.CompletionTokens, llmDur)
 			telemetry.End(llmSpan, nil)
 			lastUsage = resp.Usage.TotalTokens
 			record(resp.Message)

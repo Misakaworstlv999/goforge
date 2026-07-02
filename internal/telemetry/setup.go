@@ -39,6 +39,7 @@ func Init(ctx context.Context, opts Options) (func(context.Context) error, error
 	noop := func(context.Context) error { return nil }
 	configureBodyCapture(opts.BodyCapture, opts.BodyMaxBytes)
 	if opts.Endpoint == "" {
+		bindMetrics() // no-op provider ⇒ no-op instruments
 		return noop, nil
 	}
 
@@ -78,6 +79,7 @@ func Init(ctx context.Context, opts Options) (func(context.Context) error, error
 		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(mexp)),
 	)
 	otel.SetMeterProvider(mp)
+	bindMetrics() // rebind instruments to the real meter provider
 
 	return func(c context.Context) error {
 		errT := tp.Shutdown(c)

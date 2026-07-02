@@ -262,6 +262,14 @@ func RunAgent(ctx context.Context, deps StageDeps, task, system string, policy a
 	if reg == nil {
 		reg = tool.NewRegistry()
 	}
+	// Always honor operator steering: prepend SteerSource so steer_run and
+	// rewind/fork guidance accumulated on the blackboard reaches the agent's
+	// prompt. It is a no-op when no guidance is present, so behavior is unchanged
+	// for un-steered runs. Applying it here means every RunAgent-based stage
+	// (the whole dev workflow) honors steering uniformly.
+	if deps.State != nil {
+		policy.Sources = append([]agent.ContextSource{SteerSource(deps.State)}, policy.Sources...)
+	}
 	opts := []agent.Option{
 		agent.WithSystemPrompt(system),
 		agent.WithContextPolicy(policy),

@@ -14,8 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/Misakaworstlv999/goforge/internal/telemetry"
 )
 
 // Mode selects which interactive behavior the CLI runs. The three modes map to
@@ -335,9 +333,9 @@ func parseConfig(args []string, getenv func(string) string, envPath string) (Con
 	if cfg.OTelBodyMaxBytes == 0 {
 		cfg.OTelBodyMaxBytes = defaultOTelBodyMaxBytes
 	}
-	if _, err := telemetry.ParseBodyCapture(cfg.OTelBody); err != nil {
-		return Config{}, nil, err
-	}
+	// OTelBody is validated where it is consumed (telemetry.ParseBodyCapture in
+	// the serve/run wiring), keeping this low-level config package free of a
+	// dependency on the telemetry/OTel-SDK layer.
 	if !set["log-level"] {
 		if v := lookup(envLogLevel); v != "" {
 			cfg.LogLevel = v

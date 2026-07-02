@@ -248,9 +248,11 @@ func (p *Pipeline) drive(ctx context.Context, st *PipelineState, control <-chan 
 
 		// Stage span: the returned context parents the agent's LLM/tool spans.
 		// No-op (zero cost) unless telemetry.Init wired a real provider.
+		stageStart := time.Now()
 		stageCtx, span := telemetry.StartStage(ctx, st.CurrentStage)
 		out, err := n.run(stageCtx, st.StageInput, deps)
 		telemetry.End(span, err)
+		telemetry.RecordStageMetrics(ctx, st.CurrentStage, time.Since(stageStart))
 		if err != nil {
 			var ab *controlAbort
 			if errors.As(err, &ab) {
