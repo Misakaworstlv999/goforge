@@ -110,6 +110,23 @@ func setupMemory(cfg config.Config, reg *tool.Registry) (*memory.Store, io.Close
 	return store, vs, nil
 }
 
+// memoryExtractHook builds a run-completion hook that distills the finished run's
+// transcript into memory (M8-005). Returns nil (no hook) when memory or the
+// extract flag is off. The extractor reuses the LLM client.
+func memoryExtractHook(cfg config.Config, client llm.LLM, store pipeline.CheckpointStore, mem *memory.Store) func(string) {
+	if mem == nil || !cfg.MemoryExtract {
+		return nil
+	}
+	ex := memory.NewLLMExtractor(client)
+	return func(runID string) {
+		hist, err := store.History(context.Background(), runID)
+		if err != nil || len(hist) == 0 {
+			return
+		}
+		_, _ = memory.ExtractInto(context.Background(), ex, mem, cfg.MemoryNamespace, hist, float32(cfg.MemoryDedupScore))
+	}
+}
+
 // devWorkflowPipeline builds the M6 dev-workflow graph (requirement→design→coding→
 // review→tests→acceptance). A knowledge-base MCP server (cfg.KMServer, from the
 // mcpServers config) is scoped onto the analysis stages when configured; empty
@@ -180,7 +197,7 @@ func newServeServer(cfg config.Config, logger log.Logger) (*http.Server, func(),
 	}
 	mgr := pipeline.NewManager(func(string) *pipeline.Pipeline {
 		return buildPipeline(client, reg, cfg, store, mem)
-	})
+	}, pipeline.WithOnComplete(memoryExtractHook(cfg, client, store, mem)))
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           server.New(mgr, server.WithLogger(logger)).Handler(),
@@ -307,7 +324,7 @@ func RunCmd(args []string) int {
 
 	mgr := pipeline.NewManager(func(string) *pipeline.Pipeline {
 		return buildPipeline(client, reg, cfg, store, mem)
-	})
+	}, pipeline.WithOnComplete(memoryExtractHook(cfg, client, store, mem)))
 	defer mgr.Close()
 	return streamRun(mgr, task, os.Stdout, os.Stderr)
 }
@@ -415,4 +432,68 @@ func Resume(args []string) int {
 
 	p := buildPipeline(client, reg, cfg, store, mem)
 	return streamResume(p, rest[0], true, os.Stdout, os.Stderr)
+}
+
+// --- memory-extract ---
+
+// MemoryExtract distills facts/episodes from a persisted run's transcript into
+// long-term memory (M8-005), on demand. Requires -store (the run) and -memory
+// (the memory db).
+func MemoryExtract(args []string) int {
+	cfg, rest, err := config.ParseArgs(args, os.Getenv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	if cfg.StorePath == "" {
+		fmt.Fprintln(os.Stderr, "memory-extract requires -store <path> (the run to read)")
+		return 2
+	}
+	if cfg.MemoryPath == "" {
+		fmt.Fprintln(os.Stderr, "memory-extract requires -memory <path> (where to store facts)")
+		return 2
+	}
+	if len(rest) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: goforge memory-extract -store <p> -memory <p> <run-id>")
+		return 2
+	}
+	id := rest[0]
+	ctx := context.Background()
+
+	store, err := pipeline.OpenSQLite(cfg.StorePath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer func() { _ = store.Close() }()
+	hist, err := store.History(ctx, id)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if len(hist) == 0 {
+		fmt.Fprintf(os.Stderr, "run %s has no transcript to extract from\n", id)
+		return 1
+	}
+
+	vs, err := memory.OpenSQLiteStore(cfg.MemoryPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer func() { _ = vs.Close() }()
+	mem := memory.NewStore(
+		memory.NewOpenAIEmbedder(memory.EmbedderConfig{APIKey: cfg.APIKey, BaseURL: cfg.BaseURL, Model: cfg.EmbedModel}),
+		vs,
+	)
+	ex := memory.NewLLMExtractor(NewLLM(cfg))
+
+	added, err := memory.ExtractInto(ctx, ex, mem, cfg.MemoryNamespace, hist, float32(cfg.MemoryDedupScore))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Fprintf(os.Stdout, "extracted %d memories from run %s into %s (namespace %q)\n",
+		added, id, cfg.MemoryPath, cfg.MemoryNamespace)
+	return 0
 }

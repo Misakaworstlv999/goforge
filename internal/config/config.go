@@ -113,6 +113,12 @@ type Config struct {
 	// MemoryMode selects how memory reaches the agent: "source" (auto-inject),
 	// "tools" (memory_search/add), or "both".
 	MemoryMode string
+	// MemoryExtract, when true, distills facts/episodes from a completed run's
+	// transcript into memory (M8-005). Requires MemoryPath. Off by default.
+	MemoryExtract bool
+	// MemoryDedupScore is the cosine threshold above which an extracted fact is
+	// considered already known and skipped (0 disables semantic dedup).
+	MemoryDedupScore float64
 }
 
 // Default values shared by Parse and tests.
@@ -158,6 +164,8 @@ const (
 	envEmbedModel       = "GOFORGE_EMBED_MODEL"
 	envMemoryTopK       = "GOFORGE_MEMORY_TOPK"
 	envMemoryMode       = "GOFORGE_MEMORY_MODE"
+	envMemoryExtract    = "GOFORGE_MEMORY_EXTRACT"
+	envMemoryDedupScore = "GOFORGE_MEMORY_DEDUP_SCORE"
 )
 
 const (
@@ -181,6 +189,7 @@ const (
 	defaultEmbedModel      = "text-embedding-3-small"
 	defaultMemoryTopK      = 5
 	defaultMemoryMode      = MemoryModeBoth
+	defaultMemoryDedup     = 0.95
 )
 
 // Parse builds a Config from CLI args and an environment lookup function, also
@@ -259,6 +268,8 @@ func parseConfig(args []string, getenv func(string) string, envPath string) (Con
 	fs.StringVar(&cfg.EmbedModel, "embed-model", defaultEmbedModel, "Embedding model for memory (OpenAI-compatible)")
 	fs.IntVar(&cfg.MemoryTopK, "memory-topk", defaultMemoryTopK, "Max memories recalled per query")
 	fs.StringVar(&cfg.MemoryMode, "memory-mode", defaultMemoryMode, "How memory reaches the agent: source | tools | both")
+	fs.BoolVar(&cfg.MemoryExtract, "memory-extract", false, "Distill facts/episodes from completed runs into memory (requires -memory)")
+	fs.Float64Var(&cfg.MemoryDedupScore, "memory-dedup-score", defaultMemoryDedup, "Cosine threshold above which an extracted fact is deemed already known")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, nil, err
@@ -435,6 +446,24 @@ func parseConfig(args []string, getenv func(string) string, envPath string) (Con
 	}
 	if cfg.MemoryMode != MemoryModeSource && cfg.MemoryMode != MemoryModeTools && cfg.MemoryMode != MemoryModeBoth {
 		return Config{}, nil, fmt.Errorf("invalid -memory-mode %q: want source, tools, or both", cfg.MemoryMode)
+	}
+	if !set["memory-extract"] {
+		if v := lookup(envMemoryExtract); v != "" {
+			b, err := strconv.ParseBool(v)
+			if err != nil {
+				return Config{}, nil, fmt.Errorf("invalid %s %q: %w", envMemoryExtract, v, err)
+			}
+			cfg.MemoryExtract = b
+		}
+	}
+	if !set["memory-dedup-score"] {
+		if v := lookup(envMemoryDedupScore); v != "" {
+			f, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				return Config{}, nil, fmt.Errorf("invalid %s %q: %w", envMemoryDedupScore, v, err)
+			}
+			cfg.MemoryDedupScore = f
+		}
 	}
 	if cfg.MCPExpose != MCPExposeDirect && cfg.MCPExpose != MCPExposeBroker {
 		return Config{}, nil, fmt.Errorf("invalid -mcp-expose %q: want direct or broker", cfg.MCPExpose)

@@ -19,10 +19,22 @@ import (
 // get isolated blackboards/state (e.g. func(id) *Pipeline { return
 // workflow.BuildDevWorkflow(freshDeps, cfg) }).
 type Manager struct {
-	factory func(runID string) *Pipeline
-	mu      sync.Mutex
-	runs    map[string]*runHandle
-	seq     int
+	factory    func(runID string) *Pipeline
+	onComplete func(runID string)
+	mu         sync.Mutex
+	runs       map[string]*runHandle
+	seq        int
+}
+
+// ManagerOption configures a Manager.
+type ManagerOption func(*Manager)
+
+// WithOnComplete registers a callback fired (in the run's goroutine, before its
+// done channel closes) once a run reaches a terminal state. It is a general
+// post-run hook — e.g. distilling the run's transcript into long-term memory
+// (M8-005). nil ⇒ no hook (unchanged behavior).
+func WithOnComplete(fn func(runID string)) ManagerOption {
+	return func(m *Manager) { m.onComplete = fn }
 }
 
 type runHandle struct {
@@ -35,8 +47,20 @@ type runHandle struct {
 }
 
 // NewManager builds a Manager over a per-run Pipeline factory.
-func NewManager(factory func(runID string) *Pipeline) *Manager {
-	return &Manager{factory: factory, runs: make(map[string]*runHandle)}
+func NewManager(factory func(runID string) *Pipeline, opts ...ManagerOption) *Manager {
+	m := &Manager{factory: factory, runs: make(map[string]*runHandle)}
+	for _, o := range opts {
+		o(m)
+	}
+	return m
+}
+
+// notifyComplete fires the OnComplete hook if set. Called from a run goroutine
+// after the run loop ends and before done closes, so Wait guarantees the hook ran.
+func (m *Manager) notifyComplete(runID string) {
+	if m.onComplete != nil {
+		m.onComplete(runID)
+	}
 }
 
 // Trigger starts a new run with the given input and returns its id. An empty
@@ -72,6 +96,7 @@ func (m *Manager) Trigger(runID string, input any) (string, error) {
 		for ev := range p.runControlled(runCtx, runID, input, h.control) {
 			h.hub.publish(ev)
 		}
+		m.notifyComplete(runID)
 	}()
 	return runID, nil
 }
@@ -242,6 +267,7 @@ func (m *Manager) replay(srcID, dstID string, seq int, note string) (string, err
 		for ev := range p.runControlledFrom(runCtx, st, h.control) {
 			h.hub.publish(ev)
 		}
+		m.notifyComplete(dstID)
 	}()
 	return dstID, nil
 }

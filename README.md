@@ -187,6 +187,15 @@ delivery: `source` (auto-inject relevant memory before the task), `tools`
 (`memory_search`/`memory_add` for the agent to call), or `both` (default).
 `-memory-namespace` scopes memory per project.
 
+Memory can also be **grown automatically**: with `-memory-extract`, a completed
+run's transcript is distilled by the LLM into durable facts/episodes and stored
+(deduped by `-memory-dedup-score`), so the agent accrues knowledge across runs.
+You can also do it on demand for a persisted run:
+
+```bash
+./goforge memory-extract -store goforge.db -memory goforge-mem.db <run-id>
+```
+
 ## Project layout
 
 ```

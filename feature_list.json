@@ -547,8 +547,8 @@
             "M8-004",
             "M5-003"
           ],
-          "status": "not-started",
-          "evidence": ""
+          "status": "done",
+          "evidence": "pkg/memory/extract.go: Extractor interface + LLMExtractor (prompt distills the transcript into a JSON array of {text,kind:fact|episode,topics}; tolerant balanced-bracket array parse; ShouldExtract gate on transcript length). ExtractInto stores each fact with kind/topics metadata, deduped exactly (content-hash IDs) and semantically (skip when nearest existing >= dedup score, default 0.95). Trigger via a general Manager.WithOnComplete(runID) hook (fires after a run's loop, before done closes; zero-value = no hook) wired in serve/run to read CheckpointStore.History and ExtractInto (opt-in GOFORGE_MEMORY_EXTRACT); plus an on-demand `goforge memory-extract -store <p> -memory <p> <run-id>` subcommand. Config: GOFORGE_MEMORY_EXTRACT, GOFORGE_MEMORY_DEDUP_SCORE. Tests: extraction+store+dedup (canned LLM + fake embedder), short-transcript skip, parseFacts kind-normalization; Manager onComplete fires once with run id + nil-hook safe. init.sh green."
         }
       ]
     }

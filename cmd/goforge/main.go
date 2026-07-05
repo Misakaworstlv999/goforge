@@ -34,6 +34,8 @@ func run(args []string) int {
 			return cli.Status(args[1:])
 		case "resume":
 			return cli.Resume(args[1:])
+		case "memory-extract":
+			return cli.MemoryExtract(args[1:])
 		case "help":
 			usage(os.Stdout)
 			return 0
@@ -69,6 +71,7 @@ Usage:
   goforge run [flags] <task>           Trigger one run and stream its events
   goforge status -store <p> <run-id>   Inspect a persisted run
   goforge resume -store <p> <run-id>   Resume a paused run
+  goforge memory-extract -store <p> -memory <p> <run-id>   Distill a run into memory
   goforge help                         Show this help
 
 Run "goforge -help" for the full flag list.
