@@ -159,7 +159,36 @@ func convertMessages(msgs []llm.Message) ([]sdkanthropic.MessageParam, []sdkanth
 		}
 	}
 
-	return apiMessages, systemBlocks
+	return coalesceMessages(apiMessages), systemBlocks
+}
+
+// coalesceMessages merges consecutive same-role messages into one, concatenating
+// their content blocks. The Anthropic Messages API requires strict user/assistant
+// alternation, but our engine legitimately emits adjacent same-role turns: a tool
+// result (mapped to a user message) followed by an injected user turn (steer,
+// a resumed-conversation feedback turn, or a subagent-completion notice). Merging
+// them into a single user turn holding [tool_result blocks…]+[text block] is the
+// idiomatic Anthropic representation and keeps the request valid.
+//
+// It only ever merges WITHIN a run of the same role, so it never crosses the
+// assistant turn that owns a tool_use — tool_use→tool_result adjacency and
+// pairing are preserved.
+func coalesceMessages(msgs []sdkanthropic.MessageParam) []sdkanthropic.MessageParam {
+	if len(msgs) < 2 {
+		return msgs
+	}
+	out := make([]sdkanthropic.MessageParam, 0, len(msgs))
+	for _, m := range msgs {
+		if n := len(out); n > 0 && out[n-1].Role == m.Role {
+			out[n-1].Content = append(out[n-1].Content, m.Content...)
+			continue
+		}
+		// Clone content so later appends grow this copy, never the caller's slice.
+		cp := m
+		cp.Content = append([]sdkanthropic.ContentBlockParamUnion(nil), m.Content...)
+		out = append(out, cp)
+	}
+	return out
 }
 
 func convertMessage(msg *sdkanthropic.Message) *llm.Response {
