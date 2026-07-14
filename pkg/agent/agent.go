@@ -39,6 +39,8 @@ type SimpleAgent struct {
 	policy      ContextPolicy
 	transcript  func(llm.Message)
 	interrupt   Interrupt
+	seed        []llm.Message
+	convSink    func([]llm.Message)
 }
 
 // Interrupt is a cooperative control seam called at each ReAct step boundary (a
@@ -91,6 +93,23 @@ func WithTranscriptSink(sink func(llm.Message)) Option {
 // boundary (pause/steer/abort). nil ⇒ no checks.
 func WithInterrupt(i Interrupt) Option {
 	return func(a *SimpleAgent) { a.interrupt = i }
+}
+
+// WithSeedMessages starts the agent from an existing conversation instead of
+// seeding system+sources+task fresh. The seed is treated as already-happened
+// context (it carries its own system prompt and prior turns); the Run task, when
+// non-empty, is appended as the next user turn (e.g. review/test feedback). This
+// is how a stage resumes its own prior agent — the coding rework loop continues
+// its conversation with feedback appended, rather than restarting blind.
+func WithSeedMessages(msgs []llm.Message) Option {
+	return func(a *SimpleAgent) { a.seed = msgs }
+}
+
+// WithConversationSink registers a callback invoked once when the run ends, with
+// the final conversation (seed + new turns, after any compaction). A caller
+// persists it to resume the agent later via WithSeedMessages.
+func WithConversationSink(fn func([]llm.Message)) Option {
+	return func(a *SimpleAgent) { a.convSink = fn }
 }
 
 // WithContextPolicy enables context engineering: source injection before the
@@ -148,25 +167,42 @@ func (a *SimpleAgent) Run(ctx context.Context, task string) iter.Seq2[Event, err
 				a.transcript(m)
 			}
 		}
+		// Report the final conversation (seed + new turns, post-compaction) when
+		// the run ends, so a caller can persist and resume it (the coding rework
+		// loop seeds its next attempt with this).
+		if a.convSink != nil {
+			defer func() { a.convSink(messages) }()
+		}
 
-		if a.system != "" {
-			record(llm.SystemMessage(a.system))
-		}
-		// Inject context sources ahead of the task (the long-term-memory seam).
-		// Strict: a failing source aborts the run — silently dropping retrieved
-		// context would let the agent act confidently on missing information.
-		for _, src := range a.policy.Sources {
-			msgs, err := src(ctx, task)
-			if err != nil {
-				err = fmt.Errorf("loading context source: %w", err)
-				yield(ErrorEvent(err, 0), err)
-				return
+		if len(a.seed) > 0 {
+			// Resume a prior conversation: the seed already carries the system
+			// prompt and earlier turns (already durably logged upstream), so add it
+			// directly — not via record — to avoid double-logging. The task, when
+			// non-empty, is the new turn (e.g. review/test feedback) and IS recorded.
+			messages = append(messages, a.seed...)
+			if task != "" {
+				record(llm.UserMessage(task))
 			}
-			for _, m := range msgs {
-				record(m)
+		} else {
+			if a.system != "" {
+				record(llm.SystemMessage(a.system))
 			}
+			// Inject context sources ahead of the task (the long-term-memory seam).
+			// Strict: a failing source aborts the run — silently dropping retrieved
+			// context would let the agent act confidently on missing information.
+			for _, src := range a.policy.Sources {
+				msgs, err := src(ctx, task)
+				if err != nil {
+					err = fmt.Errorf("loading context source: %w", err)
+					yield(ErrorEvent(err, 0), err)
+					return
+				}
+				for _, m := range msgs {
+					record(m)
+				}
+			}
+			record(llm.UserMessage(task))
 		}
-		record(llm.UserMessage(task))
 
 		chatOpts := a.chatOpts()
 		lastUsage := 0 // provider-reported token count from the latest Chat

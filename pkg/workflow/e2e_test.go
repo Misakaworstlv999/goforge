@@ -52,7 +52,11 @@ func (m *codeGenLLM) Chat(_ context.Context, msgs []llm.Message, _ ...llm.Option
 	case strings.Contains(sys, "software architect"):
 		return final(`{"approach":"add a function","files":["math.go","math_test.go"],"risks":[]}`), nil
 	case strings.Contains(sys, "software engineer"):
-		if hasToolResult(msgs) {
+		// Finalize right after acting (last turn is a tool result); otherwise the
+		// agent was just handed a task or rework feedback, so write the code. Keys
+		// on the LAST turn (not "any tool result in history") so it behaves the
+		// same whether the coding conversation is fresh or RESUMED with feedback.
+		if lastIsToolResult(msgs) {
 			return final(`{"files":["math.go","math_test.go"],"summary":"implemented Add"}`), nil
 		}
 		return &llm.Response{
@@ -75,13 +79,12 @@ func (m *codeGenLLM) ChatStream(context.Context, []llm.Message, ...llm.Option) i
 	return func(yield func(llm.Chunk, error) bool) { yield(llm.Chunk{StopReason: llm.StopReasonEnd}, nil) }
 }
 
-func hasToolResult(msgs []llm.Message) bool {
-	for _, m := range msgs {
-		if m.Role == llm.RoleTool {
-			return true
-		}
-	}
-	return false
+// lastIsToolResult reports whether the most recent message is a tool result —
+// i.e. the agent just acted and should now finalize (vs. having just received a
+// task/feedback turn to act on). Robust to a resumed conversation whose earlier
+// history already contains tool results.
+func lastIsToolResult(msgs []llm.Message) bool {
+	return len(msgs) > 0 && msgs[len(msgs)-1].Role == llm.RoleTool
 }
 
 func writeArgs(path, content string) string {

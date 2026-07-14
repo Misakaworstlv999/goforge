@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Misakaworstlv999/goforge/pkg/agent"
+	"github.com/Misakaworstlv999/goforge/pkg/llm"
 	"github.com/Misakaworstlv999/goforge/pkg/pipeline"
 	"github.com/Misakaworstlv999/goforge/pkg/tool"
 	"github.com/Misakaworstlv999/goforge/pkg/tool/mcpclient"
@@ -41,8 +42,19 @@ const (
 	reportKey     = "report"
 	reviewKey     = pipeline.TempPrefix + "review"      // not persisted
 	testPassedKey = pipeline.TempPrefix + "test_passed" // last test layer result, drives testRoute
+	// codingConvoKey holds the coding agent's own conversation so a rework cycle
+	// resumes it (appending the failure feedback as the next turn) instead of
+	// restarting blind. Invocation-scoped (temp:): continuity spans one run's
+	// rework cycles; a cross-process resume degrades gracefully to a fresh pass.
+	codingConvoKey = pipeline.TempPrefix + "coding_convo"
 	// acceptanceKey is defined in types.go (the contract).
 )
+
+// codingReworkBudget bounds the coding conversation across rework cycles: when it
+// exceeds this token estimate, M4 compaction reduces the MIDDLE while preserving
+// the system/task (head) and recent feedback (tail) — the turns attention weights
+// most — so continuity stays affordable.
+const codingReworkBudget = 16000
 
 func getArtifact[T any](st *pipeline.State, key string) (T, bool) {
 	var zero T
@@ -150,18 +162,43 @@ func NewTechDesignStage(cfg Config) pipeline.Stage[string, string] {
 // NewCodingStage implements the blackboard Design into real files using the
 // sandboxed file/shell tools (scoped via Stage.Tools). It is the rework hub:
 // review and every test layer route back here on failure.
+//
+// On the first pass it seeds a fresh agent with the design. On a REWORK pass
+// (re-entered via a back-edge) it RESUMES the coding agent's own prior
+// conversation and appends the failure feedback (review reason / failing test
+// output / unmet acceptance) as the next turn — so the agent iterates on what it
+// built with full context, rather than restarting blind. The conversation is
+// stashed on the blackboard between cycles; codingReworkBudget bounds its growth
+// via compaction.
 func NewCodingStage(_ Config) pipeline.Stage[string, string] {
-	policy := agent.ContextPolicy{Breadth: agent.BreadthNarrow, Depth: agent.DepthDeep}
+	policy := agent.ContextPolicy{
+		Breadth:   agent.BreadthNarrow,
+		Depth:     agent.DepthDeep,
+		MaxTokens: codingReworkBudget, // bound rework-cycle growth via compaction
+	}
 	return pipeline.Stage[string, string]{
 		Name:   StageCoding,
 		Tools:  codingTools,
 		Policy: policy,
 		Run: func(ctx context.Context, _ string, d pipeline.StageDeps) (string, error) {
 			design, _ := getDesign(d.State)
-			out, err := pipeline.RunAgent(ctx, d, "Implement this design, then report.\n"+renderDesign(design), codingSystemPrompt(), policy)
+			prior, hasPrior := getArtifact[[]llm.Message](d.State, codingConvoKey)
+
+			var out string
+			var convo []llm.Message
+			var err error
+			if fb, isRework := reworkFeedback(d.State); isRework && hasPrior && len(prior) > 0 {
+				// Continue the prior coding conversation with the feedback appended.
+				out, convo, err = pipeline.RunAgentFrom(ctx, d, prior, fb, codingSystemPrompt(), policy)
+			} else {
+				out, convo, err = pipeline.RunAgentFrom(ctx, d, nil,
+					"Implement this design, then report.\n"+renderDesign(design), codingSystemPrompt(), policy)
+			}
 			if err != nil {
 				return "", err
 			}
+			d.State.Set(codingConvoKey, convo) // persist for the next rework cycle
+
 			cc, err := decodeJSON[CodeChange](out)
 			if err != nil {
 				return "", fmt.Errorf("coding stage: %w", err)
@@ -171,6 +208,45 @@ func NewCodingStage(_ Config) pipeline.Stage[string, string] {
 			return "code: " + cc.Summary, nil
 		},
 	}
+}
+
+// reworkFeedback assembles the failure feedback for a coding rework turn from
+// whatever gate sent execution back to coding: a failing review verdict, failing
+// test-layer output, and/or unmet acceptance points. It returns false when no
+// failure signal is present (the first pass into coding).
+func reworkFeedback(st *pipeline.State) (string, bool) {
+	var b strings.Builder
+	if v, ok := getReview(st); ok && !v.Pass && strings.TrimSpace(v.Reason) != "" {
+		fmt.Fprintf(&b, "Code review rejected your previous implementation:\n%s\n\n", v.Reason)
+	}
+	if rep, ok := getArtifact[TestReport](st, reportKey); ok {
+		for _, l := range rep.Layers {
+			if !l.Passed {
+				fmt.Fprintf(&b, "%s tests failed:\n%s\n\n", l.Kind, clipText(l.Output, 2000))
+			}
+		}
+	}
+	var unmet []string
+	for _, p := range getAcceptance(st) {
+		if p.Status == StatusFail {
+			unmet = append(unmet, fmt.Sprintf("%s: %s", p.ID, p.Evidence))
+		}
+	}
+	if len(unmet) > 0 {
+		fmt.Fprintf(&b, "Unmet acceptance points:\n- %s\n\n", strings.Join(unmet, "\n- "))
+	}
+	if b.Len() == 0 {
+		return "", false
+	}
+	return "Your previous implementation was rejected. Address the following, then reply with the updated CodeChange JSON:\n\n" + b.String(), true
+}
+
+// clipText truncates s to at most max bytes (rune-safe-ish preview) for feedback.
+func clipText(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 // reviewVerdict is the review agent's structured judgment, stashed on the

@@ -258,21 +258,35 @@ func LLMReviewGate(client llm.LLM, criteria string) Gate {
 // think/tool events are consumed internally; stages that need to surface them
 // should construct and drive the agent directly.
 func RunAgent(ctx context.Context, deps StageDeps, task, system string, policy agent.ContextPolicy) (string, error) {
+	final, _, err := RunAgentFrom(ctx, deps, nil, task, system, policy)
+	return final, err
+}
+
+// RunAgentFrom is RunAgent with conversation continuity. When seed is non-empty
+// the agent RESUMES that prior conversation and treats task as the next user
+// turn (e.g. review/test feedback appended to the coding agent's own history),
+// rather than starting fresh. It also returns the final conversation so the
+// caller can persist it and resume again next cycle (the dev-workflow rework
+// loop). With a nil seed it behaves exactly like RunAgent.
+func RunAgentFrom(ctx context.Context, deps StageDeps, seed []llm.Message, task, system string, policy agent.ContextPolicy) (string, []llm.Message, error) {
 	reg := deps.Registry
 	if reg == nil {
 		reg = tool.NewRegistry()
 	}
-	// Always honor operator steering: prepend SteerSource so steer_run and
-	// rewind/fork guidance accumulated on the blackboard reaches the agent's
-	// prompt. It is a no-op when no guidance is present, so behavior is unchanged
-	// for un-steered runs. Applying it here means every RunAgent-based stage
-	// (the whole dev workflow) honors steering uniformly.
-	if deps.State != nil {
+	// Fresh runs prepend SteerSource so steer/rewind guidance reaches the agent.
+	// A resumed run already carries that context in its seed, so skip it (and
+	// avoid re-injecting stale guidance).
+	if len(seed) == 0 && deps.State != nil {
 		policy.Sources = append([]agent.ContextSource{SteerSource(deps.State)}, policy.Sources...)
 	}
+	var convo []llm.Message
 	opts := []agent.Option{
 		agent.WithSystemPrompt(system),
 		agent.WithContextPolicy(policy),
+		agent.WithConversationSink(func(m []llm.Message) { convo = m }),
+	}
+	if len(seed) > 0 {
+		opts = append(opts, agent.WithSeedMessages(seed))
 	}
 	// Capture the full conversation transcript to the pipeline's durable log as
 	// it is produced (sent context may later be compacted; stored stays lossless).
@@ -290,11 +304,11 @@ func RunAgent(ctx context.Context, deps StageDeps, task, system string, policy a
 	var final string
 	for ev, err := range a.Run(ctx, task) {
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		if ev.Type == agent.EventResponse {
 			final = ev.Content
 		}
 	}
-	return final, nil
+	return final, convo, nil
 }
